@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -105,7 +106,10 @@ func (ic *InverterClient) ReadRegisters(unitID byte, address, count uint16) ([]b
 		ic.finishLocked(err)
 		return nil, err
 	}
+	started := time.Now()
 	result, err := ic.client.ReadHoldingRegisters(address, count)
+	slog.Debug("inverter read completed", "unit", unitID, "address", address, "count", count,
+		"latency_ms", float64(time.Since(started).Microseconds())/1000, "success", err == nil)
 	ic.finishLocked(err)
 	return result, err
 }
