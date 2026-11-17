@@ -160,11 +160,14 @@ def main():
     parser.add_argument("--soak-seconds", type=int, default=360)
     parser.add_argument("--profile", choices=["all", "split", "contiguous"], default="all")
     parser.add_argument("--intervals", type=int, nargs="+")
+    parser.add_argument("--soak-only", action="store_true", help="Validate exactly one selected profile/interval without a preceding sweep")
     args = parser.parse_args()
     if args.seconds<45 or args.soak_seconds<330:
         parser.error("Use >=45s comparison stages and >=330s soak to include a scheduled slow refresh")
     if args.intervals and (args.profile=="all" or any(value<1 for value in args.intervals)):
         parser.error("Custom positive intervals require one selected profile")
+    if args.soak_only and (args.profile=="all" or not args.intervals or len(args.intervals)!=1):
+        parser.error("Soak-only requires one profile and exactly one interval")
     args.binary = args.binary.resolve()
     out = args.output.resolve()
     out.mkdir(mode=0o700)
@@ -179,6 +182,13 @@ def main():
                 raise RuntimeError("Test port already in use: %s" % port)
     results = []
     latency_limit = 2000
+    if args.soak_only:
+        interval=args.intervals[0]
+        label="soak-"+args.profile+"-"+str(interval)+"s"
+        print(json.dumps({"starting":label,"duration_s":args.soak_seconds}),flush=True)
+        result=run_stage(args,base,out,args.profile,interval,args.soak_seconds,latency_limit,label)
+        (out/"results.json").write_text(json.dumps([result],indent=2))
+        return 0 if result["passed"] else 2
     profiles = [("split", [5, 4, 3, 2, 1]), ("contiguous", [3, 2, 1])]
     if args.profile!="all":
         profiles=[(name,args.intervals or intervals) for name,intervals in profiles if name==args.profile]

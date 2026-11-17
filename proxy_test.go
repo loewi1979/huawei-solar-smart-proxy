@@ -56,7 +56,7 @@ func testCache(t *testing.T) *RegisterCache {
 }
 
 func TestConfigValidation(t *testing.T) {
-	for _, path := range []string{"config.example.yaml", "config.sun2000-m1.example.yaml"} {
+	for _, path := range []string{"config.example.yaml", "config.sun2000-m1.example.yaml", "config.sun2000-m1.fast.example.yaml"} {
 		if _, err := LoadConfig(path); err != nil {
 			t.Fatal(path, err)
 		}
