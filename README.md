@@ -10,6 +10,7 @@ Standalone Go Modbus TCP caching proxy for Huawei SUN2000-10KTL-M1 via SDongleA-
 - Configurable fast/slow intervals and group priority. Fast jobs precede slow jobs between requests; each group has its own acquisition timestamp.
 - Per-read freshness checks, including persisted data after restart. Retention is independent of freshness. Failed polls never rejuvenate old data. Inverter absence does not prevent startup or recovery.
 - Read-only defaults. Write and unknown-read forwarding require explicit settings. Modbus is unauthenticated and needs network isolation.
+- `read_only: false` enables standard register writes and HA's Huawei login exchange. The default is `true`; the legacy `allow_writes` alias cannot be combined with it. Inverter permissions still apply.
 - Optional embedded MQTT broker with credentials, read-only subscribers and optional TLS; alternatively an external broker with validated TLS. Non-retained QoS 0 measurements with no persisted measurement queue.
 - Victron JSON topic `huawei_wechselrichter`: measured total active power and total yield only. No invented phase power factors or energy counters.
 - Authenticated YAML editor, backup download, restore upload, strict validation, atomic replacement, previous-file rollback, offline validation/rollback commands. Saved settings activate on explicit restart.

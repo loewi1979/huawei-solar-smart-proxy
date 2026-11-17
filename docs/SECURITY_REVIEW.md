@@ -10,6 +10,16 @@ Development review, not an independent penetration test or a production approval
 - Standalone listeners default to loopback and port 1502. Writes and unknown
   reads default off. Writes remain an explicit capability, protected by network
   isolation, not application authentication.
+- `read_only` is enforced in both server and inverter client. Legacy
+  `allow_writes` is accepted only without `read_only`; ambiguous or null policies
+  are rejected. Huawei 0x41 login commands require write mode and a strict
+  subcommand/shape allowlist. No arbitrary private-command passthrough exists.
+  Device identification 0x2B/0x0E remains a read-only forwarded operation.
+- Huawei credentials/challenge responses are forwarded without logging or
+  storing them. Upstream reconnects invalidate authenticated downstream sessions.
+  One trusted configuration client is supported; multi-user login isolation is
+  not claimed. Permission-denied exceptions are preserved rather than hidden
+  behind generic device failures.
 - Maximum 64 simultaneous Modbus clients, 30-second socket deadlines and
   cancellation-driven connection closure. Strict MBAP lengths, range overflow
   and write count checks. Forwarded requests share the serialized device client.
@@ -48,6 +58,22 @@ an isolated non-root container smoke test have also passed. The container test
 checks offline startup, authenticated UI endpoints, missing-data readiness,
 backup, rejected invalid restore, valid restore, rollback and SIGTERM shutdown.
 Reconnect attempts preserve the minimum request gap, including on failures.
+
+Additional emulator tests cover read-only defaults/legacy migration, both
+register write functions, low-level write denial before connecting, unchanged
+permission exceptions, device identification, allowed/blocked Huawei login
+frames, reconnect invalidation and connection quiet periods. Login frame shapes
+were checked against huawei-solar-lib commit
+aaefb69f2d985826bf34603f341cd3ad3bd296f8; real installer credentials were not used.
+Source: https://github.com/wlcrs/huawei-solar-lib/blob/aaefb69f2d985826bf34603f341cd3ad3bd296f8/src/huawei_solar/modbus_pdu.py
+
+A coordinated native Debian LXC read-only smoke test confirmed the model,
+cached Modbus responses, local MQTT telemetry and readiness behavior. A separate
+persisted-cache test with an unavailable loopback inverter confirmed stale fast
+register rejection, readiness 503 and MQTT silence while the broker remained
+alive. Raw measurements, IP addresses and credentials are intentionally excluded
+from this public review. The test processes were stopped afterwards. No hardware
+write, installer login or FusionSolar setting change was performed.
 
 Official govulncheck v1.9.0 after dependency updates: **No vulnerabilities found**
 for the scanned Windows target on review date. This is a point-in-time database

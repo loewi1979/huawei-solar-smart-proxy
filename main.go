@@ -76,6 +76,8 @@ func run() int {
 		"read_pause_ms", cfg.Polling.ReadPauseMs,
 		"slow_interval_s", cfg.Polling.SlowIntervalS,
 		"forward_unknown_reads", cfg.ForwardUnknownReads,
+		"read_only", cfg.ReadOnly,
+		"wait_after_connect_ms", cfg.Inverter.WaitAfterConnectMs,
 		"cache_path", cfg.CachePath,
 		"log_level", cfg.LogLevel,
 	)

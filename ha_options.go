@@ -57,11 +57,13 @@ func LoadHAOptions(path string) (*Config, error) {
 	}
 
 	cfg := &Config{
+		ReadOnly: true,
 		Inverter: InverterConfig{
-			Host:      opts.InverterHost,
-			Port:      opts.InverterPort,
-			UnitIDs:   unitIDs,
-			TimeoutMs: 5000,
+			WaitAfterConnectMs: 1000,
+			Host:               opts.InverterHost,
+			Port:               opts.InverterPort,
+			UnitIDs:            unitIDs,
+			TimeoutMs:          5000,
 		},
 		Server: ServerConfig{
 			Listen: ":502",

@@ -13,6 +13,7 @@ inverter:
   port: 502                  # Modbus TCP port (default: 502)
   unit_ids: [1]              # Modbus slave/unit IDs (e.g. [1, 16] for two inverters)
   timeout_ms: 5000           # Read/write timeout in milliseconds
+  wait_after_connect_ms: 1000 # SDongle quiet period after every new connection
 
 # Modbus TCP server that HA connects to
 server:
@@ -34,6 +35,7 @@ polling:
 # This handles HA's device detection at startup for registers not in any group.
 # When false, cache misses return Modbus exception 0x02 (Illegal Data Address).
 forward_unknown_reads: false
+read_only: true             # false permits HA write commands to the inverter
 
 # Log level: "debug", "info", "warn", "error"
 log_level: "info"

@@ -3,20 +3,21 @@ inverter:
   host: "127.0.0.1" # Replace only for an approved dongle test
   port: 15020
   unit_ids: [1]
-  timeout_ms: 3000
+  timeout_ms: 15000
+  wait_after_connect_ms: 1500
 server:
   listen: "127.0.0.1:1502"
 web:
   listen: "127.0.0.1:8080"
   token: "" # Set a random >=24-character password to enable config management
 polling:
-  read_pause_ms: 500
+  read_pause_ms: 1000
   fast_interval_s: 5
   slow_interval_s: 300
   fast_max_age_s: 30
   slow_max_age_s: 900
 forward_unknown_reads: false
-allow_writes: false
+read_only: true
 log_level: info
 cache_path: cache.db
 cache_ttl_h: 2

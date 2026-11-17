@@ -120,8 +120,33 @@ there is no false claim of a simultaneous whole-device snapshot. Failed reads
 do not touch timestamps; reconnect occurs before a later scheduled attempt.
 Known stale Modbus ranges return exception 0x0B and are never forwarded. Unknown
 reads are disabled by default; opt-in forwarding uses the serialized client and
-can delay polling. Write forwarding is retained as an explicit `allow_writes`
-opt-in, disabled in the standalone example and the legacy HA options path.
+can delay polling. `read_only: true` is the default and blocks register writes
+and Huawei login commands at both the Modbus server and inverter-client layer.
+Set `read_only: false` to opt into write forwarding, then restart the service.
+The legacy `allow_writes: true/false` spelling remains supported with the inverse
+meaning. Supplying both keys is rejected rather than choosing one silently.
+The legacy HA options path remains read-only.
+
+Read Device Identification (0x2B/0x0E) is forwarded in either mode. In write
+mode, only Huawei login challenge/authentication subcommands 0x41/0x24 and
+0x41/0x25 are forwarded, along with standard writes 0x06 and 0x10. Other private
+commands remain blocked. HA owns the installer credentials and verifies the
+challenge response; the proxy does not store or log those credentials. Huawei
+permission errors (including 0x80) are preserved so HA can request login.
+
+Login is bound to the upstream connection. If that connection is lost or
+recreated, an authenticated downstream connection is closed on its next request,
+forcing HA to reconnect and authenticate again. Use one trusted configuration
+client; independent simultaneous installer sessions are not a supported isolation
+model. Whether the installed HA/library/firmware combination can write a given
+setting still needs an explicitly approved hardware write test. Enabling writes
+does not bypass inverter permissions or authenticate without HA credentials.
+
+`inverter.wait_after_connect_ms` supplies the quiet period after every new TCP
+connection, including reconnects. The M1 example uses 1500 ms, a 1000 ms request
+gap, and a 15000 ms response timeout as a conservative SDongle starting point.
+Shorter response timeouts can turn delayed replies into transaction-ID errors.
+Tune from measured reliability; a short smoke test is not an overnight soak.
 
 Read-time age limits are independent of `cache_ttl_h`, which only limits disk
 retention. MQTT requires fresh power AND energy, rechecks freshness after a

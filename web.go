@@ -317,6 +317,7 @@ const indexTemplate = `<!DOCTYPE html>
       <dt>Unit IDs</dt><dd>{{range $i, $uid := .Config.Inverter.UnitIDs}}{{if $i}}, {{end}}{{$uid}}{{end}}</dd>
       <dt>Modbus Server</dt><dd>{{.Config.Server.Listen}}</dd>
       <dt>Forward Unknown</dt><dd>{{.Config.ForwardUnknownReads}}</dd>
+      <dt>Read Only</dt><dd>{{.Config.ReadOnly}}</dd>
     </dl>
   </div>
   <div class="card">

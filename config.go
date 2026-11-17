@@ -21,15 +21,17 @@ type Config struct {
 	LogLevel            string          `yaml:"log_level"`
 	CachePath           string          `yaml:"cache_path"`
 	CacheTTLH           int             `yaml:"cache_ttl_h"`
-	AllowWrites         bool            `yaml:"allow_writes"`
+	ReadOnly            bool            `yaml:"read_only"`
+	AllowWrites         *bool           `yaml:"allow_writes,omitempty"` // legacy alias, normalized by ParseConfig
 	MQTT                MQTTConfig      `yaml:"mqtt"`
 }
 
 type InverterConfig struct {
-	Host      string `yaml:"host"`
-	Port      int    `yaml:"port"`
-	UnitIDs   []byte `yaml:"unit_ids"`
-	TimeoutMs int    `yaml:"timeout_ms"`
+	WaitAfterConnectMs int    `yaml:"wait_after_connect_ms"`
+	Host               string `yaml:"host"`
+	Port               int    `yaml:"port"`
+	UnitIDs            []byte `yaml:"unit_ids"`
+	TimeoutMs          int    `yaml:"timeout_ms"`
 }
 
 type ServerConfig struct {
@@ -89,9 +91,10 @@ func ParseConfig(data []byte) (*Config, error) {
 
 	cfg := &Config{
 		Inverter: InverterConfig{
-			Port:      502,
-			UnitIDs:   []byte{1},
-			TimeoutMs: 5000,
+			WaitAfterConnectMs: 1000,
+			Port:               502,
+			UnitIDs:            []byte{1},
+			TimeoutMs:          5000,
 		},
 		Server: ServerConfig{
 			Listen: "127.0.0.1:1502",
@@ -107,6 +110,7 @@ func ParseConfig(data []byte) (*Config, error) {
 			SlowIntervalS: 300,
 		},
 		ForwardUnknownReads: false,
+		ReadOnly:            true,
 		MQTT:                defaultMQTTConfig(),
 		LogLevel:            "info",
 		CachePath:           "cache.db",
@@ -121,6 +125,41 @@ func ParseConfig(data []byte) (*Config, error) {
 	var extra any
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, fmt.Errorf("exactly one YAML document required")
+	}
+	// Detect explicit keys, including nulls. Never let two opposite settings
+	// silently override each other during restore or migration.
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil {
+		return nil, err
+	}
+	var hasReadOnly, hasAllowWrites bool
+	if len(document.Content) > 0 {
+		fields := document.Content[0].Content
+		for i := 0; i+1 < len(fields); i += 2 {
+			if fields[i].Value == "read_only" || fields[i].Value == "allow_writes" {
+				if fields[i+1].Tag != "!!bool" {
+					return nil, fmt.Errorf("%s must be true or false", fields[i].Value)
+				}
+				if fields[i].Value == "read_only" {
+					hasReadOnly = true
+				} else {
+					hasAllowWrites = true
+				}
+			}
+		}
+	}
+	var effectivePolicy struct {
+		ReadOnly    *bool `yaml:"read_only"`
+		AllowWrites *bool `yaml:"allow_writes"`
+	}
+	if err := document.Decode(&effectivePolicy); err != nil {
+		return nil, err
+	}
+	if hasReadOnly && hasAllowWrites || effectivePolicy.ReadOnly != nil && effectivePolicy.AllowWrites != nil {
+		return nil, fmt.Errorf("use read_only or legacy allow_writes, not both")
+	}
+	if cfg.AllowWrites != nil {
+		cfg.ReadOnly = !*cfg.AllowWrites
 	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -142,7 +181,7 @@ func (cfg *Config) Validate() error {
 			return bad("non-loopback web UI requires token of at least 24 characters")
 		}
 	}
-	if cfg.Inverter.Port < 1 || cfg.Inverter.Port > 65535 || cfg.Inverter.TimeoutMs < 100 || cfg.Inverter.TimeoutMs > 60000 {
+	if cfg.Inverter.Port < 1 || cfg.Inverter.Port > 65535 || cfg.Inverter.TimeoutMs < 100 || cfg.Inverter.TimeoutMs > 60000 || cfg.Inverter.WaitAfterConnectMs < 0 || cfg.Inverter.WaitAfterConnectMs > 10000 {
 		return bad("inverter port/timeout")
 	}
 	if cfg.Polling.ReadPauseMs < 100 || cfg.Polling.ReadPauseMs > 60000 || cfg.Polling.FastIntervalS < 1 || cfg.Polling.SlowIntervalS < 1 || cfg.Polling.FastMaxAgeS < cfg.Polling.FastIntervalS || cfg.Polling.SlowMaxAgeS < cfg.Polling.SlowIntervalS || cfg.CacheTTLH < 1 {
