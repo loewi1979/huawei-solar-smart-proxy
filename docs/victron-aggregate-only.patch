@@ -1,0 +1,18 @@
+--- a/dbus-mqtt-pv/dbus-mqtt-pv.py
++++ b/dbus-mqtt-pv/dbus-mqtt-pv.py
+@@ -365,6 +365,15 @@
+                 self._dbusservice["/Ac/L3/PowerFactor"] = round(pv_L3_power_factor, 3) if pv_L3_power_factor is not None else None
+                 self._dbusservice["/Ac/L3/Energy/Forward"] = round(pv_L3_forward, 2) if pv_L3_forward is not None else None
+ 
++            # Huawei has no individual phase active power / energy registers.
++            # Opt-in aggregate mode leaves unmeasured D-Bus paths unavailable.
++            if config["PV"].get("aggregate_only", "0") == "1":
++                self._dbusservice["/Ac/Current"] = None
++                self._dbusservice["/Ac/Voltage"] = None
++                for phase in ("L1", "L2", "L3"):
++                    for field in ("Power", "Current", "Voltage", "Frequency", "PowerFactor", "Energy/Forward"):
++                        self._dbusservice["/Ac/" + phase + "/" + field] = None
++
+             logging.debug("PV: {:.1f} W - {:.1f} V - {:.1f} A".format(pv_power, pv_voltage, pv_current))
+             if pv_L1_power:
+                 logging.debug("|- L1: {:.1f} W - {:.1f} V - {:.1f} A".format(pv_L1_power, pv_L1_voltage, pv_L1_current))

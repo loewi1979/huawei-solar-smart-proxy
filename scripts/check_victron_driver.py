@@ -1,0 +1,53 @@
+"""Run extracted upstream receiver logic without MQTT, D-Bus or a GX device.
+
+Usage: python scripts/check_victron_driver.py /path/to/dbus-mqtt-pv.py
+This validates receiver semantics; it is not a Venus OS integration test.
+"""
+import ast
+import json
+import logging
+import sys
+from types import SimpleNamespace
+
+source = open(sys.argv[1], encoding="utf-8").read()
+tree = ast.parse(source)
+receiver = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "on_message")
+service = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "DbusMqttPvService")
+update = next(n for n in service.body if isinstance(n, ast.FunctionDef) and n.name == "_update")
+scope = dict(
+    time=lambda: 161, logging=logging, sys=sys, json=json,
+    config={"MQTT": {"topic": "huawei_wechselrichter"}, "DEFAULT": {"voltage": "230", "frequency": "50"}, "PV": {"aggregate_only": "1" if "--aggregate-only" in sys.argv else "0"}},
+    last_changed=100, last_updated=100, timeout=60, standby_power=0,
+)
+for phase in ("", "L1_", "L2_", "L3_"):
+    for field in ("power", "current", "voltage", "forward", "frequency", "power_factor"):
+        scope["pv_" + phase + field] = None
+exec(compile(ast.Module(body=[receiver, update], type_ignores=[]), "upstream-receiver", "exec"), scope)
+fake = SimpleNamespace(_dbusservice={"/Ac/Power": 1234, "/UpdateIndex": 0, "/StatusCode": 7})
+try:
+    scope["_update"](fake)
+    raise AssertionError("Receiver failed to exit after >60 seconds silence")
+except SystemExit:
+    pass
+scope["timeout"] = 0
+assert scope["_update"](fake) is True
+assert fake._dbusservice["/Ac/Power"] == 1234, "Expected stale power to remain when timeout is disabled"
+scope["timeout"] = 60
+msg = SimpleNamespace(topic="huawei_wechselrichter", payload=b'{"pv":{"power":1234,"energy_forward":123.45}}')
+scope["on_message"](None, None, msg)
+scope["_update"](fake)
+assert fake._dbusservice["/Ac/Power"] == 1234
+if "--aggregate-only" in sys.argv:
+    assert fake._dbusservice["/Ac/L1/Power"] is None
+    assert fake._dbusservice["/Ac/L1/Energy/Forward"] is None
+    assert fake._dbusservice["/Ac/Current"] is None
+    assert fake._dbusservice["/Ac/Voltage"] is None
+else:
+    assert fake._dbusservice["/Ac/L1/Power"] == 1234, "Upstream aggregate-to-L1 fallback changed"
+    assert fake._dbusservice["/Ac/L1/Energy/Forward"] == 123.45
+assert scope["pv_L1_power_factor"] is None
+assert scope["pv_L2_forward"] is None and scope["pv_L3_forward"] is None
+scope["time"] = lambda: 180
+scope["on_message"](None, None, SimpleNamespace(topic="huawei_wechselrichter/status", payload=b'"stale"'))
+assert scope["last_changed"] == 161, "Status topic must not reset measurement timeout"
+print("PASS: timeout exit; timeout=0 stale hold; aggregate phase policy; no phase PF; status does not refresh data")

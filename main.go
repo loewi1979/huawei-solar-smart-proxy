@@ -6,13 +6,32 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
+	"sync/atomic"
 	"syscall"
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	configPath := flag.String("config", "config.yaml", "path to config file")
 	haOptionsPath := flag.String("ha-options", "", "path to HA add-on options.json (overrides -config)")
+	checkConfig := flag.Bool("check-config", false, "validate configuration and exit without network access")
+	rollbackConfig := flag.Bool("rollback-config", false, "restore previous standalone YAML configuration and exit")
 	flag.Parse()
+	if *rollbackConfig {
+		if *haOptionsPath != "" {
+			slog.Error("rollback requires standalone YAML")
+			return 1
+		}
+		if err := (&ConfigStore{Path: *configPath}).Rollback(); err != nil {
+			slog.Error("rollback failed", "error", err)
+			return 1
+		}
+		return 0
+	}
 
 	// Load config
 	var cfg *Config
@@ -24,7 +43,11 @@ func main() {
 	}
 	if err != nil {
 		slog.Error("failed to load config", "error", err)
-		os.Exit(1)
+		return 1
+	}
+	if *checkConfig {
+		slog.Info("configuration valid")
+		return 0
 	}
 
 	// Set up structured logging to stdout
@@ -57,14 +80,17 @@ func main() {
 		"log_level", cfg.LogLevel,
 	)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	var workers sync.WaitGroup
+	var failed atomic.Bool
+	start := func(f func()) { workers.Add(1); go func() { defer workers.Done(); f() }() }
 
 	// Create cache
 	cache, err := NewRegisterCache(cfg.CachePath)
 	if err != nil {
 		slog.Error("failed to open cache database", "path", cfg.CachePath, "error", err)
-		os.Exit(1)
+		return 1
 	}
 	defer cache.Close()
 
@@ -73,30 +99,38 @@ func main() {
 	var web *WebServer
 	if cfg.Web.Listen != "" {
 		web = NewWebServer(cfg, cache)
-		go func() {
+		if *haOptionsPath == "" {
+			web.store = &ConfigStore{Path: *configPath}
+		}
+		start(func() {
 			if err := web.ListenAndServe(ctx); err != nil {
+				failed.Store(true)
 				slog.Error("web server error", "error", err)
+				cancel()
 			}
-		}()
+		})
 	}
 
 	server := NewServer(cfg, cache)
-	go func() {
+	start(func() {
 		if err := server.ListenAndServe(ctx); err != nil {
+			failed.Store(true)
 			slog.Error("server error", "error", err)
 			cancel()
 		}
-	}()
+	})
 
 	// Connect to inverter
 	slog.Info("connecting to inverter", "address", cfg.InverterAddr(), "unit_ids", cfg.Inverter.UnitIDs)
 	inverterClient, err := NewInverterClient(cfg)
 	if err != nil {
 		slog.Error("failed to connect to inverter", "error", err)
-		os.Exit(1)
+		cancel()
+		workers.Wait()
+		return 1
 	}
 	defer inverterClient.Close()
-	slog.Info("connected to inverter")
+	slog.Info("inverter client ready; connection will be established on first poll")
 	server.SetInverterClient(inverterClient)
 
 	// Clean stale registers from previous runs
@@ -104,26 +138,35 @@ func main() {
 		slog.Info("cache: cleaned stale registers from previous run", "count", deleted, "ttl", cfg.CacheTTL())
 	}
 
-	// Create reader and do initial scan
+	// Start polling without a blocking initial scan.
 	reader := NewReader(cfg, inverterClient, cache)
-
-	slog.Info("performing initial register scan...")
-	if err := reader.InitialScan(ctx); err != nil {
-		slog.Error("initial scan failed", "error", err)
-		os.Exit(1)
-	}
 
 	// Start reader loop — also makes stats available to the web UI
 	if web != nil {
 		web.SetReader(reader)
 	}
-	go reader.Run(ctx)
+	start(func() { reader.Run(ctx) })
+	if cfg.MQTT.Enabled {
+		if cfg.MQTT.Embedded {
+			broker, e := startBroker(cfg.MQTT)
+			if e != nil {
+				failed.Store(true)
+				slog.Error("MQTT broker failed", "error", e)
+				cancel()
+			} else {
+				start(func() { runMQTT(ctx, cache, cfg.MQTT, broker); broker.Close() })
+			}
+		} else {
+			start(func() { runMQTT(ctx, cache, cfg.MQTT, nil) })
+		}
+	}
 
 	// Wait for shutdown signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-sigCh
-
-	slog.Info("received signal, shutting down", "signal", sig)
-	cancel()
+	<-ctx.Done()
+	slog.Info("shutting down")
+	workers.Wait()
+	if failed.Load() {
+		return 1
+	}
+	return 0
 }

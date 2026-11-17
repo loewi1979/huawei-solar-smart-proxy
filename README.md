@@ -1,162 +1,46 @@
-# huawei-solar-proxy
+# Huawei Solar Smart Proxy
 
-A Modbus TCP caching proxy for Huawei SUN2000 solar inverters, designed to sit between [Home Assistant](https://www.home-assistant.io/) (using the [huawei_solar](https://github.com/wlcrs/huawei_solar) integration) and the inverter.
+Standalone Go Modbus TCP caching proxy for Huawei SUN2000-10KTL-M1 via SDongleA-05, with SQLite, prioritized polling, a configuration UI and optional MQTT for Victron. Based on [siebertm/huawei-proxy](https://github.com/siebertm/huawei-proxy) (MIT); the upstream Git history is preserved.
 
-## The Problem
+**Development fork: Linux, hardware and GX acceptance remain pending. No production configuration has been changed.**
 
-The Huawei SUN2000 inverter:
+## Features
 
-- Supports only **one Modbus TCP connection** at a time
-- Needs **~500ms minimum gap** between read calls or it becomes unresponsive
-- The HA integration sends many batch reads per 30s update cycle, each taking time
+- Retains upstream SQLite WAL, multi-unit Modbus client, serial request handling, inter-request pauses, register map and dashboard.
+- Configurable fast/slow intervals and group priority. Fast jobs precede slow jobs between requests; each group has its own acquisition timestamp.
+- Per-read freshness checks, including persisted data after restart. Retention is independent of freshness. Failed polls never rejuvenate old data. Inverter absence does not prevent startup or recovery.
+- Read-only defaults. Write and unknown-read forwarding require explicit settings. Modbus is unauthenticated and needs network isolation.
+- Optional embedded MQTT broker with credentials, read-only subscribers and optional TLS; alternatively an external broker with validated TLS. Non-retained QoS 0 measurements with no persisted measurement queue.
+- Victron JSON topic `huawei_wechselrichter`: measured total active power and total yield only. No invented phase power factors or energy counters.
+- Authenticated YAML editor, backup download, restore upload, strict validation, atomic replacement, previous-file rollback, offline validation/rollback commands. Saved settings activate on explicit restart.
+- Native/systemd and Docker documentation, automated failure tests, vulnerability scanning and CI.
 
-This means HA gets slow, sometimes unreliable responses, and no other tool can talk to the inverter while HA is connected.
+## Local test
 
-## The Solution
+Use Go 1.27.4 or newer:
 
-```
-┌──────────────┐         ┌──────────────────────┐         ┌───────────┐
-│  HA instance │ ◄─────► │  huawei-solar-proxy   │ ◄─────► │  SUN2000  │
-│  (huawei_    │  fast   │                      │  500ms   │  Inverter │
-│   solar)     │  TCP    │  ┌──────────────┐    │  gaps    │  :502     │
-│              │         │  │ register     │    │          │           │
-│              │         │  │ cache        │    │          │           │
-└──────────────┘         └──────────────────────┘         └───────────┘
-```
-
-The proxy:
-
-1. **Continuously reads** all configured register groups from the inverter, respecting the 500ms inter-read pause
-2. **Caches** all register values in memory
-3. **Serves** Modbus TCP requests from HA instantly from cache
-4. **Forwards writes** to the inverter (for config changes, forcible charge/discharge, etc.)
-5. **Forwards unknown reads** directly to the inverter on cache miss (configurable)
-
-HA can poll as aggressively as it wants — it always gets an instant response.
-
-## Two-Tier Polling
-
-Register groups are split into two tiers:
-
-- **Fast** (every cycle, ~3.5s): Operational data — power, voltage, current, status, meter, battery SOC
-- **Slow** (every 5 minutes): Device info, firmware versions, configuration, battery pack details
-
-See [REGISTERS.md](REGISTERS.md) for the complete register map with all 511 known SUN2000 registers.
-
-## Quick Start
-
-### Docker (recommended)
-
-```bash
-# Create your config
-cp config.example.yaml config.yaml
-# Edit config.yaml — at minimum set inverter.host
-
-# Build and run
-docker build -t huawei-solar-proxy .
-docker run -d \
-  --name huawei-solar-proxy \
-  -p 502:502 \
-  -v $(pwd)/config.yaml:/etc/huawei-solar-proxy/config.yaml:ro \
-  huawei-solar-proxy
-```
-
-### Docker Compose
-
-```yaml
-services:
-  huawei-solar-proxy:
-    build: .
-    restart: unless-stopped
-    ports:
-      - "502:502"
-    volumes:
-      - ./config.yaml:/etc/huawei-solar-proxy/config.yaml:ro
-```
-
-### Native
-
-```bash
+```sh
+go test -race -count=1 ./...
+go vet ./...
 go build -o huawei-solar-proxy .
+cp config.sun2000-m1.example.yaml config.yaml
+./huawei-solar-proxy -config config.yaml -check-config
 ./huawei-solar-proxy -config config.yaml
 ```
 
-## Home Assistant Configuration
+The example points to a loopback test inverter. Open http://127.0.0.1:8080/ for status and `/config` for YAML management. Set a random `web.token` of at least 24 characters to enable configuration management (username `admin`). Keep actual credentials and addresses out of Git.
 
-Point the huawei_solar integration at the proxy instead of the inverter:
+## Victron caveat
 
-| Setting | Value |
-|---------|-------|
-| Host | IP of the machine running the proxy |
-| Port | 502 (or whatever you set in `server.listen`) |
+The stock mr-manuel driver copies aggregate values to L1 when phase powers are absent. That is not a phase measurement. A separately reviewable aggregate-only companion patch is included; GX/ESS behavior with unavailable phase paths must be tested before deployment. On silence, the receiver exits only after its nonzero timeout; `timeout = 0` can preserve stale values indefinitely.
 
-Everything else stays the same — the proxy is fully transparent.
+## Documentation
 
-## Configuration
+- [Deployment, configuration, rollback and controlled rollout](docs/DEPLOYMENT.md)
+- [Victron payload, exact driver behavior and receiver tests](docs/VICTRON.md)
+- [Upstream baseline and initial risks](docs/UPSTREAM_REVIEW.md)
+- [Security review and remaining limits](docs/SECURITY_REVIEW.md)
+- [Preserved upstream README](docs/UPSTREAM_README.md)
+- [Original register map](REGISTERS.md)
 
-Copy `config.example.yaml` to `config.yaml` and adjust:
-
-```yaml
-inverter:
-  host: "192.168.200.1"   # Your inverter's IP
-  port: 502
-  unit_id: 1
-
-server:
-  listen: ":502"           # Where HA connects
-
-polling:
-  read_pause_ms: 500       # Min gap between inverter reads
-  slow_interval_s: 300     # Slow group interval (5 min)
-
-forward_unknown_reads: true
-log_level: "info"          # debug, info, warn, error
-
-register_groups:
-  - name: inverter_state
-    address: 32000
-    count: 11
-    poll: fast
-  # ... see config.example.yaml for all groups
-```
-
-### Tuning for your setup
-
-- **No battery?** Remove `storage_unit_1`, `storage_aggregated`, `storage_unit_2`, `battery_soh`, `battery_packs_*`, `storage_config_*`, and `capacity_control` groups
-- **No power meter?** Remove the `meter` group
-- **Fewer PV strings?** Reduce `pv_strings` count (2 registers per string)
-- **Want faster updates?** Lower `read_pause_ms` (not recommended below 300ms)
-- **Want debug output?** Set `log_level: "debug"`
-
-## How It Works
-
-### Startup
-
-1. Loads YAML config
-2. Connects to inverter via Modbus TCP
-3. Performs initial scan of all register groups (populates cache)
-4. Starts the reader loop goroutine
-5. Starts the Modbus TCP server
-
-### Reader Loop
-
-Runs continuously:
-- Reads all **fast** groups in sequence, with `read_pause_ms` between each
-- Every `slow_interval_s`, also reads **slow** groups
-- Failed reads log a warning and continue (self-healing)
-
-### Server
-
-Standard Modbus TCP server handling:
-- **0x03** (Read Holding Registers): Serve from cache
-- **0x04** (Read Input Registers): Serve from cache
-- **0x06** (Write Single Register): Forward to inverter, update cache
-- **0x10** (Write Multiple Registers): Forward to inverter, update cache
-
-### Cache Misses
-
-When `forward_unknown_reads: true` (default), any register not in the cache is read directly from the inverter (respecting the pause). This handles HA's device detection probing at startup for registers not covered by your configured groups.
-
-## License
-
-MIT
+MIT; original license and attribution are retained.

@@ -67,9 +67,12 @@ func LoadHAOptions(path string) (*Config, error) {
 			Listen: ":502",
 		},
 		Web: WebConfig{
-			Listen: ":8080",
+			Listen: "127.0.0.1:8080",
 		},
 		Polling: PollingConfig{
+			FastIntervalS: 5,
+			FastMaxAgeS:   30,
+			SlowMaxAgeS:   900,
 			ReadPauseMs:   opts.ReadPauseMs,
 			SlowIntervalS: opts.SlowIntervalS,
 		},
@@ -80,6 +83,9 @@ func LoadHAOptions(path string) (*Config, error) {
 		CacheTTLH:           opts.CacheTTLH,
 	}
 
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 

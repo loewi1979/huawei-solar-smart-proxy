@@ -1,0 +1,27 @@
+[Unit]
+Description=Huawei Solar Smart Proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=huawei-proxy
+Group=huawei-proxy
+WorkingDirectory=/var/lib/huawei-smart-proxy
+ExecStartPre=/usr/local/bin/huawei-solar-proxy -config /etc/huawei-smart-proxy/config.yaml -check-config
+ExecStart=/usr/local/bin/huawei-solar-proxy -config /etc/huawei-smart-proxy/config.yaml
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+StateDirectory=huawei-smart-proxy
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/etc/huawei-smart-proxy /var/lib/huawei-smart-proxy
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

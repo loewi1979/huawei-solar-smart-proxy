@@ -16,12 +16,12 @@ inverter:
 
 # Modbus TCP server that HA connects to
 server:
-  listen: ":502"             # Listen address (default: ":502")
+  listen: "127.0.0.1:1502"             # Listen address (default: ":502")
                              # Use ":1502" if running unprivileged
 
 # Web status UI
 web:
-  listen: ":8080"             # Listen address for the web UI (default: ":8080")
+  listen: "127.0.0.1:8080"             # Listen address for the web UI (default: ":8080")
                               # Set to "" to disable the web UI
 
 # Polling configuration
@@ -33,7 +33,7 @@ polling:
 # When true, cache misses are forwarded to the inverter (with pause).
 # This handles HA's device detection at startup for registers not in any group.
 # When false, cache misses return Modbus exception 0x02 (Illegal Data Address).
-forward_unknown_reads: true
+forward_unknown_reads: false
 
 # Log level: "debug", "info", "warn", "error"
 log_level: "info"

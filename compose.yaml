@@ -1,0 +1,18 @@
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.standalone
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 90s
+    ports:
+      - "127.0.0.1:1502:1502"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:1883:1883"
+    volumes:
+      - ./runtime/config:/etc/huawei-smart-proxy
+      - ./runtime/data:/var/lib/huawei-smart-proxy

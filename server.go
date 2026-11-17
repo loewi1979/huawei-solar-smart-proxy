@@ -7,7 +7,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Server is a Modbus TCP server that serves register values from cache
@@ -44,6 +46,9 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}()
 
 	slog.Info("modbus TCP server listening", "address", s.cfg.Server.Listen)
+	var connections sync.WaitGroup
+	defer connections.Wait()
+	slots := make(chan struct{}, 64)
 
 	for {
 		conn, err := listener.Accept()
@@ -56,12 +61,27 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 
 		slog.Info("client connected", "remote", conn.RemoteAddr())
-		go s.handleConnection(ctx, conn)
+		select {
+		case slots <- struct{}{}:
+			connections.Add(1)
+			go func() { defer connections.Done(); defer func() { <-slots }(); s.handleConnection(ctx, conn) }()
+		default:
+			conn.Close()
+		}
 	}
 }
 
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-done:
+		}
+	}()
 	defer slog.Info("client disconnected", "remote", conn.RemoteAddr())
 
 	for {
@@ -75,6 +95,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		// [4:6] Length (remaining bytes including unit ID)
 		// [6]   Unit ID
 		header := make([]byte, 7)
+		conn.SetDeadline(time.Now().Add(30 * time.Second))
 		if _, err := io.ReadFull(conn, header); err != nil {
 			if err != io.EOF {
 				slog.Debug("read header error", "error", err)
@@ -92,7 +113,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 			return
 		}
 
-		if length < 2 || length > 256 {
+		if length < 2 || length > 254 {
 			slog.Warn("invalid MBAP length, closing connection", "length", length)
 			return
 		}
@@ -105,6 +126,20 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 		}
 
 		fc := pdu[0]
+		allowed := false
+		for _, u := range s.cfg.Inverter.UnitIDs {
+			if u == unitID {
+				allowed = true
+			}
+		}
+		if !allowed {
+			sendException(conn, txID, unitID, fc, 0x0b)
+			continue
+		}
+		if (fc == 0x06 || fc == 0x10) && !s.cfg.AllowWrites {
+			sendException(conn, txID, unitID, fc, 0x01)
+			continue
+		}
 
 		switch fc {
 		case 0x03, 0x04: // Read Holding Registers / Read Input Registers
@@ -121,7 +156,7 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 }
 
 func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc byte, pdu []byte) {
-	if len(pdu) < 5 {
+	if len(pdu) != 5 {
 		sendException(conn, txID, unitID, fc, 0x03)
 		return
 	}
@@ -129,16 +164,24 @@ func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc
 	address := binary.BigEndian.Uint16(pdu[1:3])
 	count := binary.BigEndian.Uint16(pdu[3:5])
 
-	if count == 0 || count > 125 {
+	if count == 0 || count > 125 || uint32(address)+uint32(count) > 65536 {
 		sendException(conn, txID, unitID, fc, 0x03) // Illegal Data Value
 		return
 	}
 
 	// Try cache first
-	data := s.cache.GetBytes(unitID, address, count)
-	if data != nil {
+	values, _, freshErr := s.cache.Fresh(unitID, address, count, s.cfg.MaxAge(address, count), time.Now())
+	if freshErr == nil {
+		data := make([]byte, len(values)*2)
+		for i, v := range values {
+			binary.BigEndian.PutUint16(data[i*2:], v)
+		}
 		slog.Debug("cache hit", "unit_id", unitID, "address", address, "count", count)
 		sendReadResponse(conn, txID, unitID, fc, data)
+		return
+	}
+	if s.cfg.KnownRange(address, count) {
+		sendException(conn, txID, unitID, fc, 0x0b)
 		return
 	}
 
@@ -163,7 +206,11 @@ func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc
 }
 
 func (s *Server) handleWriteSingleRegister(conn net.Conn, txID uint16, unitID byte, pdu []byte) {
-	if len(pdu) < 5 {
+	if !s.cfg.AllowWrites {
+		sendException(conn, txID, unitID, 0x06, 0x01)
+		return
+	}
+	if len(pdu) != 5 {
 		sendException(conn, txID, unitID, 0x06, 0x03)
 		return
 	}
@@ -195,6 +242,10 @@ func (s *Server) handleWriteSingleRegister(conn net.Conn, txID uint16, unitID by
 }
 
 func (s *Server) handleWriteMultipleRegisters(conn net.Conn, txID uint16, unitID byte, pdu []byte) {
+	if !s.cfg.AllowWrites {
+		sendException(conn, txID, unitID, 0x10, 0x01)
+		return
+	}
 	if len(pdu) < 6 {
 		sendException(conn, txID, unitID, 0x10, 0x03)
 		return
@@ -204,7 +255,7 @@ func (s *Server) handleWriteMultipleRegisters(conn net.Conn, txID uint16, unitID
 	count := binary.BigEndian.Uint16(pdu[3:5])
 	byteCount := pdu[5]
 
-	if int(byteCount) != int(count)*2 || len(pdu) < 6+int(byteCount) {
+	if count == 0 || count > 123 || uint32(address)+uint32(count) > 65536 || int(byteCount) != int(count)*2 || len(pdu) != 6+int(byteCount) {
 		sendException(conn, txID, unitID, 0x10, 0x03)
 		return
 	}

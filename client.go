@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -27,10 +26,7 @@ func NewInverterClient(cfg *Config) (*InverterClient, error) {
 	handler.Timeout = cfg.InverterTimeout()
 	handler.IdleTimeout = 0 // keep connection alive
 
-	if err := handler.Connect(); err != nil {
-		return nil, fmt.Errorf("connecting to inverter at %s: %w", cfg.InverterAddr(), err)
-	}
-
+	// Connect lazily: an unavailable inverter must not stop diagnostics or recovery.
 	client := modbus.NewClient(handler)
 
 	return &InverterClient{
@@ -41,6 +37,8 @@ func NewInverterClient(cfg *Config) (*InverterClient, error) {
 }
 
 func (ic *InverterClient) Close() {
+	ic.mu.Lock()
+	defer ic.mu.Unlock()
 	ic.handler.Close()
 }
 

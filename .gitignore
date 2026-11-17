@@ -11,3 +11,7 @@ config.yaml
 cache.db
 cache.db-shm
 cache.db-wal
+runtime/
+*.exe
+coverage.out
+*.test-driver.py
