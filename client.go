@@ -91,14 +91,15 @@ func (ic *InverterClient) WriteMultipleRegisters(unitID byte, address, count uin
 	return result, err
 }
 
-// Reconnect closes the TCP connection and resets state so the next
+// Reconnect closes the TCP connection so the next
 // operation triggers an automatic reconnect by the modbus library.
 func (ic *InverterClient) Reconnect() {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
 
 	ic.handler.Close()
-	ic.lastRead = time.Time{}
+	// Preserve the last attempt time: failures/reconnects must not bypass the
+	// dongle's minimum request gap and create a burst of failing requests.
 }
 
 // IsDeviceBusy returns true if the error is a Modbus exception 0x06

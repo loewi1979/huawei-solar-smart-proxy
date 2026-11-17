@@ -499,3 +499,27 @@ func TestFastPollingPreemptsSlowBacklog(t *testing.T) {
 		t.Fatalf("slow backlog was not preempted: %d slow reads", slowCount)
 	}
 }
+
+func TestReconnectPreservesRequestGap(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t)
+	cfg.Inverter.Port = listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	client, err := NewInverterClient(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.ReadRegisters(1, 32080, 2); err == nil {
+		t.Fatal("expected unavailable inverter")
+	}
+	client.Reconnect()
+	started := time.Now()
+	client.ReadRegisters(1, 32080, 2)
+	if time.Since(started) < 80*time.Millisecond {
+		t.Fatal("failed reads bypassed request pause after reconnect")
+	}
+}

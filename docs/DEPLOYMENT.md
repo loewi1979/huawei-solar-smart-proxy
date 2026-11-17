@@ -146,5 +146,6 @@ writes. It must not be presented as a drop-in production add-on upgrade.
 4. Isolated GX receiver tests and aggregate-only patch review (VICTRON.md).
 5. Review results and obtain explicit approval before production HA/GX changes.
 
-Systemd and Docker runtime tests on Linux, live GX/ESS behavior, SDongle access,
-and an extended overnight hardware soak are pending until the test host is ready.
+The isolated Docker smoke test runs in GitHub CI. Systemd and Docker runtime
+tests on the actual Linux test host, live GX/ESS behavior, SDongle access and an
+extended overnight hardware soak remain pending until that host is ready.

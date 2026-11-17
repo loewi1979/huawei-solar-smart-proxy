@@ -43,10 +43,16 @@ protection, measured MQTT mapping, invalid register sentinel, backup/restore/
 rollback, authentication/CSRF header, TCP simulator reconnect, embedded broker
 authentication and stale silence, and external broker publishing.
 
+GitHub Linux race tests, Linux vulnerability scanning, Docker image build and
+an isolated non-root container smoke test have also passed. The container test
+checks offline startup, authenticated UI endpoints, missing-data readiness,
+backup, rejected invalid restore, valid restore, rollback and SIGTERM shutdown.
+Reconnect attempts preserve the minimum request gap, including on failures.
+
 Official govulncheck v1.9.0 after dependency updates: **No vulnerabilities found**
 for the scanned Windows target on review date. This is a point-in-time database
-result, not a guarantee. Linux race/vulnerability and Docker build jobs are
-defined in CI and must be checked there or on the Linux test host.
+result, not a guarantee. Linux race/vulnerability and Docker runtime jobs are
+defined in CI; their latest result is visible on the development pull request.
 
 The real Victron driver's on_message and _update functions were extracted and
 executed with isolated globals and a fake D-Bus dictionary. Tests verify timeout
