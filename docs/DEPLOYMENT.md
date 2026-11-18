@@ -49,6 +49,61 @@ SSH tunnel or HTTPS reverse proxy; direct HTTP exposes credentials in transit.
 `/healthz` checks process HTTP availability; `/readyz` returns 503 when any fast
 configured group is missing/stale. These endpoints share UI authentication.
 
+## Logs and read-only soak monitoring
+
+The application writes structured JSON to standard output. Under systemd the
+service log is in the journal, not a file inside the project directory:
+
+```sh
+sudo journalctl -u huawei-smart-proxy -n 100 --no-pager
+sudo journalctl -u huawei-smart-proxy --since today
+sudo journalctl -u huawei-smart-proxy -f
+```
+
+`log_level: info` is the normal YAML setting; `debug` adds per-request timing
+and is useful for a bounded polling investigation. It does not log raw register
+values or passwords. Docker users use `docker compose logs`. Prefer the service
+manager's rotation and retention over a second application logfile. Configure
+journald persistence/space limits at the host level if needed; a YAML file-path
+option is not required for systemd or Docker deployments.
+
+The separate optional `deploy/observe_test.py` observer records availability,
+read-only mode, restart count and a valid non-retained MQTT sample every minute.
+It discards the measurement payload and makes no Modbus requests. Its private
+JSON configuration supplies `web_token`, optional `web_url` (default
+`http://127.0.0.1:8080`), `mqtt_probe`, `mqtt_credentials` and `output_directory`.
+It writes `health.jsonl` (4 MiB with three rotated backups, about 16 MiB maximum)
+and `latest.json` there. In the dedicated soak installation this directory is
+`/home/codex/huawei-proxy/soak`. This is a local record, not an alert service.
+
+## Installation without a Huawei battery
+
+The optional contiguous profile reads inverter registers 32000–32107 and
+device/rated-power information. It does not request Huawei storage groups.
+An attached Huawei Smartmeter requires its own group, for example:
+
+```yaml
+register_groups:
+  - {name: fast_snapshot, address: 32000, count: 108, poll: fast, priority: 10}
+  - {name: meter, address: 37100, count: 39, poll: fast}
+  - {name: device_info, address: 30000, count: 35, poll: slow}
+  - {name: rated_power, address: 30073, count: 4, poll: slow}
+```
+
+Confirm meter status and firmware support during the read-only hardware test.
+The meter is exposed through inverter unit 1 behind the SDongle; adding another
+unit ID is not needed for this register block. A battery connected to Victron
+does not justify Huawei battery polling. The SDongle is the transport gateway;
+this profile does not claim to collect separate dongle management telemetry.
+The additional meter request changes the load: the previously measured 2.59s
+median applies to the inverter-only profile, not this combined profile.
+
+For approved direct LAN testing, replace the three loopback listen addresses
+with the container IP while keeping ports 1502 (Modbus), 8080 (web), and 1883
+(embedded MQTT). Retain `read_only: true` and authentication. Also update the
+observer's `web_url` and MQTT probe host if loopback is no longer listening.
+No Home Assistant or Victron consumer configuration is changed by doing this.
+
 ## Backup, restore and rollback
 
 Download YAML from `/config`. Restore/upload fills the editor; Validate does

@@ -2,7 +2,7 @@
 
 Standalone Go Modbus TCP caching proxy for Huawei SUN2000-10KTL-M1 via SDongleA-05, with SQLite, prioritized polling, a configuration UI and optional MQTT for Victron. Based on [siebertm/huawei-proxy](https://github.com/siebertm/huawei-proxy) (MIT); the upstream Git history is preserved.
 
-**Development fork: Linux, hardware and GX acceptance remain pending. No production configuration has been changed.**
+**Development fork: native Linux and initial read-only SDongle tests passed. Extended daytime testing and GX acceptance remain pending. HA and Victron settings have not been changed by this project.**
 
 ## Features
 
@@ -31,7 +31,30 @@ cp config.sun2000-m1.example.yaml config.yaml
 
 The example points to a loopback test inverter. Open http://127.0.0.1:8080/ for status and `/config` for YAML management. Set a random `web.token` of at least 24 characters to enable configuration management (username `admin`). Keep actual credentials and addresses out of Git.
 
-## Victron caveat
+## MQTT and Victron
+
+The proxy includes both an optional MQTT broker and a Victron JSON publisher.
+With `mqtt.enabled: true` and `mqtt.embedded: true`, subscribers connect directly
+to `mqtt.listen` with the configured username and password. Remote subscribers
+can read only `mqtt.topic` and its `/status` topic; publishing is denied.
+With `mqtt.embedded: false`, the proxy instead publishes to an external
+`mqtt.broker` (`tcp://` or certificate-validated `ssl://`). No additional broker
+is needed in embedded mode. Use a strong password on shared networks; non-empty
+credentials are required, and the password length is the operator's choice.
+
+Default topic: `huawei_wechselrichter`. The wire payload is:
+
+```json
+{"pv":{"power":1234,"energy_forward":123.45}}
+```
+
+Values are measured total inverter active power in W and lifetime yield in kWh.
+They are published at `mqtt.interval_s`, only while both samples meet
+`mqtt.max_age_s`. Measurements use QoS 0, are not retained, and stop when stale;
+the separate `/status` topic reports availability. Smartmeter grid flow is a
+separate measurement and is not substituted for inverter PV power.
+
+### Victron caveat
 
 The stock mr-manuel driver copies aggregate values to L1 when phase powers are absent. That is not a phase measurement. A separately reviewable aggregate-only companion patch is included; GX/ESS behavior with unavailable phase paths must be tested before deployment. On silence, the receiver exits only after its nonzero timeout; `timeout = 0` can preserve stale values indefinitely.
 

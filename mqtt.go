@@ -56,8 +56,8 @@ func (m MQTTConfig) Validate(c *Config) error {
 		if _, _, err := net.SplitHostPort(m.Listen); err != nil {
 			return err
 		}
-		if len(m.Password) < 16 || m.Username == "" {
-			return fmt.Errorf("embedded MQTT requires username and password of at least 16 characters")
+		if m.Password == "" || m.Username == "" {
+			return fmt.Errorf("embedded MQTT requires non-empty username and password")
 		}
 		if (m.TLSCert == "") != (m.TLSKey == "") {
 			return fmt.Errorf("MQTT TLS requires both cert and key")

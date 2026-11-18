@@ -84,6 +84,29 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
+func TestEmbeddedMQTTRequiresCredentials(t *testing.T) {
+	c := testConfig(t)
+	c.MQTT.Enabled, c.MQTT.Embedded = true, true
+	c.MQTT.IntervalS, c.MQTT.MaxAgeS = 1, 2
+	c.MQTT.Username, c.MQTT.Password = "test-user", "short"
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"username", "password"} {
+		t.Run(field, func(t *testing.T) {
+			m := c.MQTT
+			if field == "username" {
+				m.Username = ""
+			} else {
+				m.Password = ""
+			}
+			if err := m.Validate(c); err == nil {
+				t.Fatal("accepted empty credentials")
+			}
+		})
+	}
+}
+
 // This fixture represents an independently managed external broker which
 // authorizes the proxy to publish, rather than the embedded subscriber-only ACL.
 type externalFixtureAuth struct{ subscriberAuth }

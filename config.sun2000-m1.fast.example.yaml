@@ -27,7 +27,7 @@ mqtt:
   listen: "127.0.0.1:1883"
   broker: "tcp://127.0.0.1:1883" # Used only when embedded: false
   username: gx
-  password: "" # Embedded mode requires >=16 characters
+  password: "" # Embedded mode requires a non-empty password; prefer a strong one
   topic: huawei_wechselrichter
   unit_id: 1
   interval_s: 2
