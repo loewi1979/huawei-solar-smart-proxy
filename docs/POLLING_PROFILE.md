@@ -18,7 +18,7 @@ of the optional entities through the selected blocks. It does not create or
 enable HA entities. Entity count is not raw register count: bitfields share
 registers, 32-bit values need two registers, and contiguous blocks contain
 unused addresses. The old four-group inverter/meter profile covered 186 raw
-registers; this profile covers 222. No synthetic phase measurements are added.
+registers; the current profile covers 254 including startup metadata. No synthetic phase measurements are added (optional phase-power estimates are explicitly labelled).
 
 Excluded optional HA entities: minimum/maximum PV voltage (32177–32178), four
 per-MPPT energy counters (32212–32219), and backup/off-grid switching (47604).
@@ -33,7 +33,8 @@ and are not additional Huawei registers. No Huawei storage polling is included.
 | --- | --- | --- | --- |
 | fast_snapshot | 32000–32107 | 2s | Inverter state/alarms, PV1/2 V/A, DC input W, AC W, phase V/A, peak power, PF, frequency, efficiency, temperature, insulation, startup/shutdown time, lifetime yield |
 | meter | 37100–37138 | 2s | Grid import/export W and real phase powers, meter status, V/A, PF, frequency and energy counters |
-| device_info | 30000–30034 | 300s | Model/serial/product information |
+| device_info | 30000–30064 | 300s | Model, serial, product, firmware and software strings; covers HA's combined 30015/50 startup read |
+| pv_capabilities | 30071–30072 | 300s | PV string count and MPPT count required during HA device creation |
 | rated_power | 30073–30076 | 300s | Rated and maximum active power |
 | energy_statistics | 32108–32119 | 300s | DC input energy, statistics time, hourly/daily/monthly/yearly yield |
 | inverter_config | 40122–40131 | 300s | Power factor/reactive settings and percentage/fixed-W derating |
@@ -56,6 +57,27 @@ and 15s timeout. The additional four slow groups add four requests per five
 minutes and additional startup work. Validate their support and timing on the
 actual firmware. Unsupported optional registers must not cause repeated
 reconnects to be mistaken for a healthy profile.
+
+### Home Assistant device discovery
+
+Entity inventory alone does not cover startup dependencies: the installed HA
+library also reads serial number, product number, firmware and software as one
+30015/50 request, then reads PV string count at 30071. The earlier short metadata
+block was insufficient and caused HA to report a generic connection failure
+despite a working TCP connection. Those mandatory reads are now cached.
+
+This HA-oriented profile also enables `forward_unknown_reads` for the library's
+on-demand feature masks and timezone/DST reads. These use the same serialized
+upstream connection and request spacing; no second dongle connection is opened.
+They are not added to the periodic polling list. Unsupported hardware feature
+probes can therefore return actual device errors for HA's discovery logic to
+handle without causing a failing periodic poll every five minutes. The library
+can also probe storage product identifiers once during discovery, even when no
+Huawei battery is installed; no battery telemetry is periodically polled here.
+Known stale cached ranges remain rejected, and write permission still follows
+`read_only`. On-demand reads add real upstream work and must be included in the
+final HA-connected cadence test. For a publisher-only installation without HA,
+unknown-read forwarding can remain disabled.
 
 ### Hardware check on 2026-11-18
 

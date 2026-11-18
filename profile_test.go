@@ -65,10 +65,13 @@ func TestMeterProfileCoverageAndDashboard(t *testing.T) {
 	}
 	// Required HA readings: status/alarms, PV, phase diagnostics, power,
 	// lifetime energy, daily/monthly/yearly yield, meter and configuration.
-	for _, span := range [][2]uint16{{32000, 11}, {32016, 4}, {32064, 31}, {32106, 14}, {37100, 39}, {30073, 4}, {40125, 3}, {42054, 4}, {47415, 10}} {
+	for _, span := range [][2]uint16{{30015, 50}, {30071, 2}, {32000, 11}, {32016, 4}, {32064, 31}, {32106, 14}, {37100, 39}, {30073, 4}, {40125, 3}, {42054, 4}, {47415, 10}} {
 		if !cfg.KnownRange(span[0], span[1]) {
 			t.Fatalf("required range missing: %v", span)
 		}
+	}
+	if !cfg.ForwardUnknownReads {
+		t.Fatal("HA startup feature and timezone reads need serialized on-demand forwarding")
 	}
 	if cfg.MaxAge(32114, 2) != 900*time.Second || cfg.MaxAge(32080, 2) != 30*time.Second || cfg.MaxAge(37113, 2) != 30*time.Second {
 		t.Fatal("daily yield must use slow freshness; PV/grid power must use fast freshness")

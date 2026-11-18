@@ -18,7 +18,7 @@ polling:
   slow_interval_s: 300
   fast_max_age_s: 30
   slow_max_age_s: 900
-forward_unknown_reads: false
+forward_unknown_reads: true # Serialized on-demand HA startup/feature reads; not periodic polling
 read_only: true # Explicit false enables writes; inverter authentication still applies
 log_level: info
 cache_path: cache.db
@@ -40,7 +40,8 @@ mqtt:
 register_groups:
   - {name: fast_snapshot, address: 32000, count: 108, poll: fast, priority: 10}
   - {name: meter, address: 37100, count: 39, poll: fast}
-  - {name: device_info, address: 30000, count: 35, poll: slow}
+  - {name: device_info, address: 30000, count: 65, poll: slow}
+  - {name: pv_capabilities, address: 30071, count: 2, poll: slow}
   - {name: rated_power, address: 30073, count: 4, poll: slow}
   - {name: energy_statistics, address: 32108, count: 12, poll: slow}
   - {name: inverter_config, address: 40122, count: 10, poll: slow}
