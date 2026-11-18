@@ -482,9 +482,21 @@ func TestEmbeddedBrokerAuthAndStaleSilence(t *testing.T) {
 	}
 	defer subscriber.Disconnect(0)
 	messages := make(chan paho.Message, 10)
-	token = subscriber.Subscribe(m.Topic, 0, func(_ paho.Client, msg paho.Message) { messages <- msg })
+	unexpected := make(chan string, 10)
+	token = subscriber.SubscribeMultiple(map[string]byte{"#": 0, "$SYS/#": 0}, func(_ paho.Client, msg paho.Message) {
+		if msg.Topic() == m.Topic {
+			messages <- msg
+		} else if msg.Topic() != m.Topic+"/status" {
+			unexpected <- msg.Topic()
+		}
+	})
 	if !token.WaitTimeout(time.Second) || token.Error() != nil {
 		t.Fatal("subscribe failed")
+	}
+	for _, topic := range []string{"unrelated/private", "$SYS/broker/test"} {
+		if err := b.Publish(topic, []byte("must not be delivered"), false, 0); err != nil {
+			t.Fatal(err)
+		}
 	}
 	c := testCache(t)
 	c.Set(1, 32080, []uint16{0, 42})
@@ -505,6 +517,11 @@ func TestEmbeddedBrokerAuthAndStaleSilence(t *testing.T) {
 	select {
 	case <-messages:
 		t.Fatal("stale sample republished")
+	default:
+	}
+	select {
+	case topic := <-unexpected:
+		t.Fatalf("wildcard subscription leaked %s", topic)
 	default:
 	}
 	denied := paho.NewClient(paho.NewClientOptions().AddBroker("tcp://" + addr).SetClientID("unauthorized").SetUsername("bad").SetPassword("bad").SetConnectTimeout(time.Second))

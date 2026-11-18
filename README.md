@@ -42,6 +42,8 @@ The proxy includes both an optional MQTT broker and a Victron JSON publisher.
 With `mqtt.enabled: true` and `mqtt.embedded: true`, subscribers connect directly
 to `mqtt.listen` with the configured username and password. Remote subscribers
 can read only `mqtt.topic` and its `/status` topic; publishing is denied.
+MQTT Explorer's default `#` and `$SYS/#` subscription filters are accepted;
+delivery remains limited to the configured measurement and status topics.
 With `mqtt.embedded: false`, the proxy instead publishes to an external
 `mqtt.broker` (`tcp://` or certificate-validated `ssl://`). No additional broker
 is needed in embedded mode. Use a strong password on shared networks; non-empty

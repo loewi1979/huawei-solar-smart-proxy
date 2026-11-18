@@ -168,6 +168,11 @@ CA, mount its CA bundle at `/etc/ssl/certs/ca-certificates.crt`. Embedded TLS
 uses `tls_cert`/`tls_key`. External broker accounts need write access only to
 the exact telemetry and status topics. Embedded subscribers can only read these
 two topics and cannot publish. No broker persistence or telemetry retention.
+MQTT Explorer may use its standard `#` and `$SYS/#` subscriptions. The broker
+accepts those filters but checks each delivered topic too, so unrelated data
+and broker-system topics remain unavailable. An exact subscription to
+`huawei_wechselrichter` also works. Measurements are non-retained: leave the
+client connected to receive the next live publication.
 
 ## Polling and failure policy
 

@@ -86,7 +86,13 @@ func (h *subscriberAuth) OnConnectAuthenticate(_ *mochi.Client, p packets.Packet
 	return subtle.ConstantTimeCompare(p.Connect.Username, []byte(h.cfg.Username)) == 1 && subtle.ConstantTimeCompare(p.Connect.Password, []byte(h.cfg.Password)) == 1
 }
 func (h *subscriberAuth) OnACLCheck(_ *mochi.Client, topic string, write bool) bool {
-	return !write && (topic == h.cfg.Topic || topic == h.cfg.Topic+"/status")
+	if write {
+		return false
+	}
+	// Mochi checks both subscription filters and each delivered topic. Accept
+	// MQTT Explorer's default filters, but still deliver only our two topics.
+	return topic == h.cfg.Topic || topic == h.cfg.Topic+"/status" ||
+		topic == h.cfg.Topic+"/#" || topic == "#" || topic == "$SYS/#"
 }
 
 func startBroker(m MQTTConfig) (*mochi.Server, error) {
