@@ -10,7 +10,7 @@ Source: https://github.com/mr-manuel/venus-os_dbus-mqtt-pv/blob/033663ed622c2d79
 Topic: `huawei_wechselrichter`, non-retained QoS 0 telemetry, clean sessions.
 
 ```json
-{"pv":{"power":1234,"energy_forward":123.45}}
+{"pv":{"power":1234,"energy_forward":123.45,"L1":{"voltage":230.7,"current":1.801,"frequency":50.01},"L2":{"voltage":231.2,"current":1.79,"frequency":50.01},"L3":{"voltage":229.8,"current":1.82,"frequency":50.01}}}
 ```
 
 `power` is measured signed total active power (holding registers 32080–32081,
@@ -18,6 +18,22 @@ W). `energy_forward` is measured accumulated yield (32106–32107, raw / 100
 kWh). Both samples must be present and fresh. The publisher does not derive
 phase powers from voltage/current or the total power factor, split energy
 between phases, or publish a fabricated zero when data are unavailable.
+
+Available optional AC diagnostics are published independently under L1/L2/L3:
+
+| Field | Inverter registers | Scale / meaning |
+| --- | --- | --- |
+| L1/L2/L3 voltage | 32069 / 32070 / 32071 | unsigned U16 / 10, V phase-to-neutral |
+| L1/L2/L3 current | 32072–32073 / 32074–32075 / 32076–32077 | signed I32 / 1000, A |
+| L1/L2/L3 frequency | 32085 | unsigned U16 / 100, Hz; one measured grid frequency shared across phases |
+
+Only present, fresh, non-sentinel fields are included; measured zero is valid.
+Missing/stale optional data are omitted without suppressing fresh required
+totals. The unambiguous single aggregate `pv.voltage` / `pv.current` fields are
+not available for this M1, so no averaging, summing or L1 substitution is used.
+Per-phase active power, PF and lifetime energy are absent because dedicated
+inverter measurements are not available. Smartmeter phase power is grid
+import/export and must not be relabelled as inverter PV phase power.
 
 The generic upstream register map is retained; M1 firmware support must still
 be checked against the actual device. PV input power must not be confused with
@@ -30,11 +46,17 @@ phase power is supplied. Stock `on_message` derives current from power / its
 configured default voltage when current is missing. That is receiver behavior,
 not a measurement made by this proxy. Unmodified stock behavior does **not**
 satisfy a requirement that all displayed phase energy and current be measured.
+The reviewed stock parser also requires `Lx.power` before reading any of that
+phase's voltage/current/frequency. Supplying measured diagnostics alone does
+not make the stock receiver use them; do not fabricate phase power as a workaround.
 
 `victron-aggregate-only.patch` is a separate, opt-in companion patch, prepared
 against the exact commit above. With `[PV] aggregate_only = 1`, it leaves total
-power and total energy available and clears unmeasured current, voltage and all
-phase paths to `None`. It does not change the MQTT format or the timeout.
+power and total energy available, clears unmeasured aggregate voltage/current
+and phase power/PF/energy paths to `None`, and preserves optional measured
+phase voltage/current/frequency independently of phase power. Omitted optional
+fields are cleared on the next valid PV message so old phase readings do not
+remain displayed. It does not change the timeout.
 The patch has been exercised with the driver's actual message/update functions
 using a fake D-Bus dictionary. It is **not deployed** and is **not yet tested
 on Venus OS/ESS**. Whether the GX UI and ESS accept this aggregate-only device

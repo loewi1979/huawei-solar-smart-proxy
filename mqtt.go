@@ -123,8 +123,9 @@ func startBroker(m MQTTConfig) (*mochi.Server, error) {
 	return b, nil
 }
 
-// Only measured total active power (W) and lifetime energy (kWh). In particular,
-// total PF cannot establish individual phase active powers or phase energies.
+// Publish only measured AC quantities. Total PF cannot establish individual
+// phase active powers or phase energies. Missing optional measurements are
+// omitted, never replaced with zero or another phase's value.
 func victronPayload(c *RegisterCache, m MQTTConfig, now time.Time) ([]byte, error) {
 	power, _, err := c.Fresh(m.UnitID, 32080, 2, time.Duration(m.MaxAgeS)*time.Second, now)
 	if err != nil {
@@ -139,7 +140,45 @@ func victronPayload(c *RegisterCache, m MQTTConfig, now time.Time) ([]byte, erro
 	if p == 0x80000000 || p == 0x7fffffff || e == 0xffffffff {
 		return nil, fmt.Errorf("Huawei invalid measurement sentinel")
 	}
-	return json.Marshal(map[string]any{"pv": map[string]any{"power": int32(p), "energy_forward": float64(e) / 100}})
+	pv := map[string]any{"power": int32(p), "energy_forward": float64(e) / 100}
+	optional := func(address, count uint16, signed bool, gain float64) (float64, bool) {
+		regs, _, err := c.Fresh(m.UnitID, address, count, time.Duration(m.MaxAgeS)*time.Second, now)
+		if err != nil {
+			return 0, false
+		}
+		if count == 1 {
+			if regs[0] == 0xffff {
+				return 0, false
+			}
+			return float64(regs[0]) / gain, true
+		}
+		raw := uint32(regs[0])<<16 | uint32(regs[1])
+		if signed {
+			if raw == 0x80000000 || raw == 0x7fffffff {
+				return 0, false
+			}
+			return float64(int32(raw)) / gain, true
+		}
+		return float64(raw) / gain, true
+	}
+	// Huawei supplies one measured grid frequency, shared by all three phases.
+	frequency, frequencyOK := optional(32085, 1, false, 100)
+	for i := uint16(0); i < 3; i++ {
+		phase := map[string]float64{}
+		if voltage, ok := optional(32069+i, 1, false, 10); ok {
+			phase["voltage"] = voltage
+		}
+		if current, ok := optional(32072+2*i, 2, true, 1000); ok {
+			phase["current"] = current
+		}
+		if frequencyOK {
+			phase["frequency"] = frequency
+		}
+		if len(phase) > 0 {
+			pv[fmt.Sprintf("L%d", i+1)] = phase
+		}
+	}
+	return json.Marshal(map[string]any{"pv": pv})
 }
 
 func runMQTT(ctx context.Context, c *RegisterCache, m MQTTConfig, b *mochi.Server) {

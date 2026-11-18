@@ -4,6 +4,7 @@ Usage: python3 scripts/check_mqtt_sample.py private-test-credentials.json
 JSON keys: host, port, username, password, topic. Credentials are never printed.
 """
 import json
+import math
 import pathlib
 import socket
 import struct
@@ -77,9 +78,18 @@ def main():
             if body[2:2 + topic_size].decode() != config["topic"]:
                 raise ValueError("Unexpected topic")
             payload = json.loads(body[2 + topic_size:])
-            if set(payload) != {"pv"} or set(payload["pv"]) != {"power", "energy_forward"}:
-                raise ValueError("Unexpected or invented fields in aggregate payload")
-            if not all(isinstance(x, (int, float)) for x in payload["pv"].values()):
+            if set(payload) != {"pv"} or not isinstance(payload["pv"], dict):
+                raise ValueError("Invalid PV object")
+            pv = payload["pv"]
+            if not {"power", "energy_forward"} <= set(pv) <= {"power", "energy_forward", "L1", "L2", "L3"}:
+                raise ValueError("Unexpected or invented aggregate fields")
+            values = [pv["power"], pv["energy_forward"]]
+            for phase in ("L1", "L2", "L3"):
+                if phase in pv:
+                    if not isinstance(pv[phase], dict) or not pv[phase] or not set(pv[phase]) <= {"voltage", "current", "frequency"}:
+                        raise ValueError("Unexpected or invented phase fields")
+                    values.extend(pv[phase].values())
+            if not all(type(x) in (int, float) and math.isfinite(x) for x in values):
                 raise ValueError("Non-numeric measurement")
             print(json.dumps({"topic": config["topic"], "retained": False, "qos": 0, "payload": payload}, indent=2))
             conn.sendall(b"\xe0\x00")

@@ -47,7 +47,31 @@ else:
     assert fake._dbusservice["/Ac/L1/Energy/Forward"] == 123.45
 assert scope["pv_L1_power_factor"] is None
 assert scope["pv_L2_forward"] is None and scope["pv_L3_forward"] is None
+phases = {"L1": {"voltage": 230.7, "current": 12.345, "frequency": 50.01},
+          "L2": {"voltage": 231.2, "current": 12.1, "frequency": 50.01},
+          "L3": {"voltage": 229.8, "current": 0.0, "frequency": 50.01}}
+wire = {"pv": {"power": 1234, "energy_forward": 123.45, **phases}}
+scope["time"] = lambda: 162
+scope["on_message"](None, None, SimpleNamespace(topic="huawei_wechselrichter", payload=json.dumps(wire).encode()))
+scope["_update"](fake)
+if "--aggregate-only" in sys.argv:
+    for phase, values in phases.items():
+        for field, value in values.items():
+            assert fake._dbusservice["/Ac/" + phase + "/" + field.capitalize()] == value
+        for field in ("Power", "PowerFactor", "Energy/Forward"):
+            assert fake._dbusservice["/Ac/" + phase + "/" + field] is None
+    # Omitted optional fields must clear old measurements, not retain them.
+    wire = {"pv": {"power": 1234, "energy_forward": 123.45, "L1": {"voltage": 230.1}}}
+    scope["time"] = lambda: 163
+    scope["on_message"](None, None, SimpleNamespace(topic="huawei_wechselrichter", payload=json.dumps(wire).encode()))
+    scope["_update"](fake)
+    assert fake._dbusservice["/Ac/L1/Voltage"] == 230.1
+    assert fake._dbusservice["/Ac/L1/Current"] is None
+    assert fake._dbusservice["/Ac/L2/Voltage"] is None
+else:
+    assert fake._dbusservice["/Ac/L1/Voltage"] == 230, "Stock driver unexpectedly read phase voltage without phase power"
+last_sample_time = scope["last_changed"]
 scope["time"] = lambda: 180
 scope["on_message"](None, None, SimpleNamespace(topic="huawei_wechselrichter/status", payload=b'"stale"'))
-assert scope["last_changed"] == 161, "Status topic must not reset measurement timeout"
-print("PASS: timeout exit; timeout=0 stale hold; aggregate phase policy; no phase PF; status does not refresh data")
+assert scope["last_changed"] == last_sample_time, "Status topic must not reset measurement timeout"
+print("PASS: timeout exit; stale hold; aggregate policy; measured phase diagnostics; omitted fields cleared; no invented phase PF; status timeout")

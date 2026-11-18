@@ -12,7 +12,7 @@ Standalone Go Modbus TCP caching proxy for Huawei SUN2000-10KTL-M1 via SDongleA-
 - Read-only defaults. Write and unknown-read forwarding require explicit settings. Modbus is unauthenticated and needs network isolation.
 - `read_only: false` enables standard register writes and HA's Huawei login exchange. The default is `true`; the legacy `allow_writes` alias cannot be combined with it. Inverter permissions still apply.
 - Optional embedded MQTT broker with credentials, read-only subscribers and optional TLS; alternatively an external broker with validated TLS. Non-retained QoS 0 measurements with no persisted measurement queue.
-- Victron JSON topic `huawei_wechselrichter`: measured total active power and total yield only. No invented phase power factors or energy counters.
+- Victron JSON topic `huawei_wechselrichter`: measured total active power/yield, plus available phase AC voltages/currents and measured grid frequency. No invented phase powers, power factors or energy counters.
 - Authenticated YAML editor, backup download, restore upload, strict validation, atomic replacement, previous-file rollback, offline validation/rollback commands. Saved settings activate on explicit restart.
 - Native/systemd and Docker documentation, automated failure tests, vulnerability scanning and CI.
 
@@ -52,10 +52,15 @@ credentials are required, and the password length is the operator's choice.
 Default topic: `huawei_wechselrichter`. The wire payload is:
 
 ```json
-{"pv":{"power":1234,"energy_forward":123.45}}
+{"pv":{"power":1234,"energy_forward":123.45,"L1":{"voltage":230.7,"current":1.801,"frequency":50.01},"L2":{"voltage":231.2,"current":1.79,"frequency":50.01},"L3":{"voltage":229.8,"current":1.82,"frequency":50.01}}}
 ```
 
 Values are measured total inverter active power in W and lifetime yield in kWh.
+Phase voltage is in V and current in A, read from the inverter's AC registers.
+Huawei provides one measured grid frequency in Hz, shared by all three phases.
+Optional phase fields are omitted when missing, stale or invalid. The M1 has
+no unambiguous single aggregate voltage/current, so those top-level fields are
+omitted, along with unmeasured phase powers, phase PF and phase energy counters.
 They are published at `mqtt.interval_s`, only while both samples meet
 `mqtt.max_age_s`. Measurements use QoS 0, are not retained, and stop when stale;
 the separate `/status` topic reports availability. Smartmeter grid flow is a
@@ -63,7 +68,12 @@ separate measurement and is not substituted for inverter PV power.
 
 ### Victron caveat
 
-The stock mr-manuel driver copies aggregate values to L1 when phase powers are absent. That is not a phase measurement. A separately reviewable aggregate-only companion patch is included; GX/ESS behavior with unavailable phase paths must be tested before deployment. On silence, the receiver exits only after its nonzero timeout; `timeout = 0` can preserve stale values indefinitely.
+The reviewed stock mr-manuel driver ignores phase voltage/current when phase
+power is absent and copies aggregate values to L1. A separately reviewable
+companion patch preserves measured phase diagnostics without inventing phase
+power/energy. GX/ESS behavior must still be tested before deployment. On silence,
+the receiver exits only after its nonzero timeout; `timeout = 0` can preserve
+stale values indefinitely.
 
 ## Documentation
 

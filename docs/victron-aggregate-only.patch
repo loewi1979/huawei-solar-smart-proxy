@@ -1,17 +1,45 @@
 --- a/dbus-mqtt-pv/dbus-mqtt-pv.py
 +++ b/dbus-mqtt-pv/dbus-mqtt-pv.py
-@@ -365,6 +365,15 @@
+@@ -141,11 +141,24 @@
+         global pv_L1_power, pv_L1_current, pv_L1_voltage, pv_L1_frequency, pv_L1_power_factor, pv_L1_forward
+         global pv_L2_power, pv_L2_current, pv_L2_voltage, pv_L2_frequency, pv_L2_power_factor, pv_L2_forward
+         global pv_L3_power, pv_L3_current, pv_L3_voltage, pv_L3_frequency, pv_L3_power_factor, pv_L3_forward
++        global pv_measured_phases
+ 
+         # get JSON from topic
+         if msg.topic == config["MQTT"]["topic"]:
+             if msg.payload != "" and msg.payload != b"":
+                 jsonpayload = json.loads(msg.payload)
++
++                # Preserve measured phase diagnostics independently of phase power.
++                if config["PV"].get("aggregate_only", "0") == "1" and isinstance(jsonpayload.get("pv"), dict) and "power" in jsonpayload["pv"]:
++                    pv_measured_phases = {}
++                    for phase in ("L1", "L2", "L3"):
++                        raw = jsonpayload["pv"].get(phase, {})
++                        pv_measured_phases[phase] = {}
++                        if isinstance(raw, dict):
++                            for field in ("voltage", "current", "frequency"):
++                                value = raw.get(field)
++                                if type(value) in (int, float) and value == value and abs(value) != float("inf"):
++                                    pv_measured_phases[phase][field] = float(value)
+ 
+                 last_changed = int(time())
+ 
+@@ -365,6 +378,18 @@
                  self._dbusservice["/Ac/L3/PowerFactor"] = round(pv_L3_power_factor, 3) if pv_L3_power_factor is not None else None
                  self._dbusservice["/Ac/L3/Energy/Forward"] = round(pv_L3_forward, 2) if pv_L3_forward is not None else None
  
 +            # Huawei has no individual phase active power / energy registers.
-+            # Opt-in aggregate mode leaves unmeasured D-Bus paths unavailable.
++            # Keep measured phase diagnostics; clear all unmeasured paths.
 +            if config["PV"].get("aggregate_only", "0") == "1":
 +                self._dbusservice["/Ac/Current"] = None
 +                self._dbusservice["/Ac/Voltage"] = None
 +                for phase in ("L1", "L2", "L3"):
 +                    for field in ("Power", "Current", "Voltage", "Frequency", "PowerFactor", "Energy/Forward"):
 +                        self._dbusservice["/Ac/" + phase + "/" + field] = None
++                    measured = globals().get("pv_measured_phases", {}).get(phase, {})
++                    for wire, path in (("voltage", "Voltage"), ("current", "Current"), ("frequency", "Frequency")):
++                        self._dbusservice["/Ac/" + phase + "/" + path] = measured.get(wire)
 +
              logging.debug("PV: {:.1f} W - {:.1f} V - {:.1f} A".format(pv_power, pv_voltage, pv_current))
              if pv_L1_power:
