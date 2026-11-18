@@ -96,7 +96,38 @@ limited to 30s for all registers. The regression test exercises a real Modbus
 connection with three-minute-old slow data and fresh fast data. The corrected
 server applies each register's own group age limit within one SQLite snapshot;
 stale fast data is still rejected after 30s and stale slow data after 900s.
-The hardware update for this separate fix requires deployment and verification.
+The correction was subsequently deployed and the combined read was included in
+the successful hardware checks below.
+
+### Cadence with Home Assistant connected, 2026-11-18
+
+A separate 661s daytime observation with HA connected completed 1,320 cached
+Modbus reads, including combined 32106/14 reads, without a failed response.
+All seven slow groups refreshed at least twice. MQTT delivered 331 valid
+messages with all three phase diagnostics and explicitly labelled phase-power
+estimates; there were no MQTT reconnects. This test made no inverter writes.
+
+| Observation | Median | 95th percentile | Maximum |
+| --- | --- | --- | --- |
+| MQTT message interval | 2.000s | 2.000s | 2.016s |
+| Inverter fast-block acquisition interval | 4.493s | 8.000s | 23.047s |
+| Meter-block acquisition interval | 4.484s | 8.016s | 19.031s |
+
+Cache acquisitions were inferred from age resets sampled every 0.5s; their
+timings are approximate. Slow-group intervals were 301.8–315.9s, with only
+one or two complete intervals observed per group. The highest observed fast
+cache age was 23s, below the configured 30s ceiling. Of the 331 MQTT messages,
+199 repeated the previous active-power value: message cadence is not fresh
+measurement cadence.
+
+A preceding 721s observation before HA connected completed 1,440 cached reads
+and 361 MQTT messages without downstream errors or MQTT reconnects. Fast-block
+medians were approximately 4.5s; maximum inverter/meter intervals were 20.0s
+and 25.0s. The HA-connected test therefore did not show a clear deterioration,
+but these bounded observations do not establish long-term reliability.
+Successful cached reads do not prove that every upstream poll succeeded or
+explain the long acquisition gaps. Correlate them with service JSON warnings;
+journald's priority filter alone does not select embedded JSON `level` fields.
 
 ## Write tests
 
