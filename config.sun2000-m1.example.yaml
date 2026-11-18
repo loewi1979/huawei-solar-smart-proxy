@@ -9,6 +9,7 @@ server:
   listen: "127.0.0.1:1502"
 web:
   listen: "127.0.0.1:8080"
+  auth_enabled: true # Explicit false permits status, YAML editing and backups without login
   token: "" # Set a random >=24-character password to enable config management
 polling:
   read_pause_ms: 1000

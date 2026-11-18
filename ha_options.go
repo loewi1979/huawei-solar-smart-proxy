@@ -69,7 +69,8 @@ func LoadHAOptions(path string) (*Config, error) {
 			Listen: ":502",
 		},
 		Web: WebConfig{
-			Listen: "127.0.0.1:8080",
+			Listen:      "127.0.0.1:8080",
+			AuthEnabled: true,
 		},
 		Polling: PollingConfig{
 			FastIntervalS: 5,

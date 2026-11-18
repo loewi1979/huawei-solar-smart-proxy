@@ -49,6 +49,15 @@ SSH tunnel or HTTPS reverse proxy; direct HTTP exposes credentials in transit.
 `/healthz` checks process HTTP availability; `/readyz` returns 503 when any fast
 configured group is missing/stale. These endpoints share UI authentication.
 
+Authentication defaults to `web.auth_enabled: true`. On an operator-approved
+trusted LAN, `web.auth_enabled: false` explicitly disables login for status,
+health, configuration editing, backups and rollback. Anyone able to reach that
+listener can then read the YAML (including its passwords) and save settings for
+the next restart. An existing `web.token` can remain for later re-enabling; it
+is ignored while authentication is disabled. The custom request header, YAML
+validation and body limits still apply. This option changes neither MQTT login
+nor Modbus write policy.
+
 ## Logs and read-only soak monitoring
 
 The application writes structured JSON to standard output. Under systemd the

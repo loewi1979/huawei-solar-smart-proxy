@@ -74,7 +74,7 @@ func (w *WebServer) authorized(next http.Handler) http.Handler {
 		rw.Header().Set("Cache-Control", "no-store")
 		rw.Header().Set("X-Content-Type-Options", "nosniff")
 		rw.Header().Set("X-Frame-Options", "DENY")
-		if w.cfg.Web.Token != "" {
+		if w.cfg.Web.AuthEnabled && w.cfg.Web.Token != "" {
 			user, pass, ok := r.BasicAuth()
 			if !ok || user != "admin" || subtle.ConstantTimeCompare([]byte(pass), []byte(w.cfg.Web.Token)) != 1 {
 				rw.Header().Set("WWW-Authenticate", `Basic realm="Huawei Proxy", charset="UTF-8"`)
@@ -87,15 +87,15 @@ func (w *WebServer) authorized(next http.Handler) http.Handler {
 }
 func (w *WebServer) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/config", func(rw http.ResponseWriter, r *http.Request) {
-		if w.store == nil || w.cfg.Web.Token == "" {
-			http.Error(rw, "Config management requires a token and standalone YAML", 403)
+		if w.store == nil || w.cfg.Web.AuthEnabled && w.cfg.Web.Token == "" {
+			http.Error(rw, "Config management requires standalone YAML and a token when authentication is enabled", 403)
 			return
 		}
 		rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 		io.WriteString(rw, configPage)
 	})
 	mux.HandleFunc("/api/config", func(rw http.ResponseWriter, r *http.Request) {
-		if w.store == nil || w.cfg.Web.Token == "" {
+		if w.store == nil || w.cfg.Web.AuthEnabled && w.cfg.Web.Token == "" {
 			http.Error(rw, "Config management disabled", 403)
 			return
 		}
@@ -142,7 +142,7 @@ func (w *WebServer) configRoutes(mux *http.ServeMux) {
 		io.WriteString(rw, "Saved. Restart the service to activate. Previous config is available for rollback.")
 	})
 	mux.HandleFunc("/api/config/rollback", func(rw http.ResponseWriter, r *http.Request) {
-		if w.store == nil || w.cfg.Web.Token == "" {
+		if w.store == nil || w.cfg.Web.AuthEnabled && w.cfg.Web.Token == "" {
 			http.Error(rw, "Config management disabled", 403)
 			return
 		}

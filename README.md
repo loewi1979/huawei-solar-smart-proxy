@@ -31,6 +31,11 @@ cp config.sun2000-m1.example.yaml config.yaml
 
 The example points to a loopback test inverter. Open http://127.0.0.1:8080/ for status and `/config` for YAML management. Set a random `web.token` of at least 24 characters to enable configuration management (username `admin`). Keep actual credentials and addresses out of Git.
 
+For a trusted LAN, explicitly setting `web.auth_enabled: false` disables login
+for every web endpoint, including configuration editing and YAML backups.
+The default is `true`; a non-loopback listener then requires a >=24-character
+token. MQTT authentication and the Modbus `read_only` policy are independent.
+
 ## MQTT and Victron
 
 The proxy includes both an optional MQTT broker and a Victron JSON publisher.

@@ -39,8 +39,9 @@ type ServerConfig struct {
 }
 
 type WebConfig struct {
-	Listen string `yaml:"listen"`
-	Token  string `yaml:"token"`
+	Listen      string `yaml:"listen"`
+	Token       string `yaml:"token"`
+	AuthEnabled bool   `yaml:"auth_enabled"`
 }
 
 type PollingConfig struct {
@@ -100,7 +101,8 @@ func ParseConfig(data []byte) (*Config, error) {
 			Listen: "127.0.0.1:1502",
 		},
 		Web: WebConfig{
-			Listen: "127.0.0.1:8080",
+			Listen:      "127.0.0.1:8080",
+			AuthEnabled: true,
 		},
 		Polling: PollingConfig{
 			FastIntervalS: 5,
@@ -175,7 +177,7 @@ func (cfg *Config) Validate() error {
 	if cfg.LogLevel != "debug" && cfg.LogLevel != "info" && cfg.LogLevel != "warn" && cfg.LogLevel != "error" {
 		return bad("log_level")
 	}
-	if cfg.Web.Listen != "" {
+	if cfg.Web.Listen != "" && cfg.Web.AuthEnabled {
 		host, _, err := net.SplitHostPort(cfg.Web.Listen)
 		if err == nil && host != "localhost" && (net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback()) && len(cfg.Web.Token) < 24 {
 			return bad("non-loopback web UI requires token of at least 24 characters")

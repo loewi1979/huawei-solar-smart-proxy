@@ -329,6 +329,60 @@ func TestConfigBackupRestoreRollback(t *testing.T) {
 	}
 }
 
+func TestWebAuthenticationOptOut(t *testing.T) {
+	if !testConfig(t).Web.AuthEnabled {
+		t.Fatal("authentication must default to enabled")
+	}
+	for _, token := range []string{"", strings.Repeat("x", 24)} {
+		t.Run(fmt.Sprintf("token-length-%d", len(token)), func(t *testing.T) {
+			cfg, err := ParseConfig([]byte(testYAML + "web:\n  listen: 192.0.2.1:8080\n  auth_enabled: false\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Web.Token = token
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(testYAML), 0600); err != nil {
+				t.Fatal(err)
+			}
+			w := NewWebServer(cfg, testCache(t))
+			w.store = &ConfigStore{Path: path}
+			mux := http.NewServeMux()
+			w.configRoutes(mux)
+			handler := w.authorized(mux)
+			for _, route := range []string{"/config", "/api/config"} {
+				resp := httptest.NewRecorder()
+				handler.ServeHTTP(resp, httptest.NewRequest("GET", route, nil))
+				if resp.Code != 200 || resp.Header().Get("WWW-Authenticate") != "" {
+					t.Fatalf("login still required for %s: %d", route, resp.Code)
+				}
+			}
+			for _, header := range []bool{false, true} {
+				req := httptest.NewRequest("POST", "/api/config", strings.NewReader(testYAML+"log_level: debug\n"))
+				if header {
+					req.Header.Set("X-Proxy-Config", "1")
+				}
+				resp := httptest.NewRecorder()
+				handler.ServeHTTP(resp, req)
+				want := 403
+				if header {
+					want = 200
+				}
+				if resp.Code != want {
+					t.Fatalf("save with custom header=%v: got %d want %d", header, resp.Code, want)
+				}
+			}
+			req := httptest.NewRequest("POST", "/api/config/rollback", nil)
+			req.Header.Set("X-Proxy-Config", "1")
+			resp := httptest.NewRecorder()
+			handler.ServeHTTP(resp, req)
+			data, _ := os.ReadFile(path)
+			if resp.Code != 200 || string(data) != testYAML {
+				t.Fatal("unauthenticated explicit rollback failed")
+			}
+		})
+	}
+}
+
 // A real TCP fixture exercises goburrow framing, reconnect after connection
 // loss, polling, SQLite timestamps and the no-upstream-access-on-cache-hit path.
 func TestSimulatorFailureRecovery(t *testing.T) {

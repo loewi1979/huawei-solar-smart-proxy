@@ -23,8 +23,10 @@ Development review, not an independent penetration test or a production approval
 - Maximum 64 simultaneous Modbus clients, 30-second socket deadlines and
   cancellation-driven connection closure. Strict MBAP lengths, range overflow
   and write count checks. Forwarded requests share the serialized device client.
-- Non-loopback web binding requires a >=24-character token. All web endpoints
-  use the same authentication, no-store, frame denial and content-type hardening.
+- With the default `web.auth_enabled: true`, non-loopback web binding requires
+  a >=24-character token. Explicit `false` is an operator opt-out for trusted
+  LANs and exposes every web endpoint, including YAML secrets and configuration
+  mutations, without login. All web endpoints retain no-store, frame denial and content-type hardening.
   Config mutations require POST and a custom header; no CORS permission is
   provided. Body size is limited to 1 MiB and HTTP timeouts are bounded.
 - Strict YAML fields, exactly one YAML document, range/overlap/unit validation,
