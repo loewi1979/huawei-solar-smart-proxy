@@ -86,9 +86,14 @@ def main():
             values = [pv["power"], pv["energy_forward"]]
             for phase in ("L1", "L2", "L3"):
                 if phase in pv:
-                    if not isinstance(pv[phase], dict) or not pv[phase] or not set(pv[phase]) <= {"voltage", "current", "frequency"}:
+                    if not isinstance(pv[phase], dict) or not pv[phase] or not set(pv[phase]) <= {"voltage", "current", "frequency", "power", "power_is_estimate"}:
                         raise ValueError("Unexpected or invented phase fields")
-                    values.extend(pv[phase].values())
+                    fields = pv[phase]
+                    if ("power" in fields) != (fields.get("power_is_estimate") is True):
+                        raise ValueError("Phase power must be explicitly labelled as an estimate")
+                    if "power_is_estimate" in fields and fields["power_is_estimate"] is not True:
+                        raise ValueError("Invalid phase power estimate flag")
+                    values.extend(value for key,value in fields.items() if key != "power_is_estimate")
             if not all(type(x) in (int, float) and math.isfinite(x) for x in values):
                 raise ValueError("Non-numeric measurement")
             print(json.dumps({"topic": config["topic"], "retained": False, "qos": 0, "payload": payload}, indent=2))

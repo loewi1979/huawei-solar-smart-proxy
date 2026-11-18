@@ -33,6 +33,7 @@ mqtt:
   unit_id: 1
   interval_s: 5
   max_age_s: 30
+  estimate_phase_power: false # Opt-in V * I * total PF approximation
   tls_cert: ""
   tls_key: ""
 register_groups:

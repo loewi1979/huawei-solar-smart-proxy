@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/url"
 	"strings"
@@ -19,18 +20,19 @@ import (
 )
 
 type MQTTConfig struct {
-	Enabled   bool   `yaml:"enabled"`
-	Embedded  bool   `yaml:"embedded"`
-	Listen    string `yaml:"listen"`
-	Broker    string `yaml:"broker"`
-	Username  string `yaml:"username"`
-	Password  string `yaml:"password"`
-	Topic     string `yaml:"topic"`
-	UnitID    byte   `yaml:"unit_id"`
-	IntervalS int    `yaml:"interval_s"`
-	MaxAgeS   int    `yaml:"max_age_s"`
-	TLSCert   string `yaml:"tls_cert"`
-	TLSKey    string `yaml:"tls_key"`
+	Enabled            bool   `yaml:"enabled"`
+	Embedded           bool   `yaml:"embedded"`
+	Listen             string `yaml:"listen"`
+	Broker             string `yaml:"broker"`
+	Username           string `yaml:"username"`
+	Password           string `yaml:"password"`
+	Topic              string `yaml:"topic"`
+	UnitID             byte   `yaml:"unit_id"`
+	IntervalS          int    `yaml:"interval_s"`
+	MaxAgeS            int    `yaml:"max_age_s"`
+	TLSCert            string `yaml:"tls_cert"`
+	TLSKey             string `yaml:"tls_key"`
+	EstimatePhasePower bool   `yaml:"estimate_phase_power"`
 }
 
 func defaultMQTTConfig() MQTTConfig {
@@ -123,9 +125,9 @@ func startBroker(m MQTTConfig) (*mochi.Server, error) {
 	return b, nil
 }
 
-// Publish only measured AC quantities. Total PF cannot establish individual
-// phase active powers or phase energies. Missing optional measurements are
-// omitted, never replaced with zero or another phase's value.
+// Publish measured AC quantities, with optional explicitly labelled phase-power
+// estimates using a common measured total PF. These are not phase measurements.
+// Missing optional inputs are omitted, never replaced with a fabricated zero.
 func victronPayload(c *RegisterCache, m MQTTConfig, now time.Time) ([]byte, error) {
 	power, _, err := c.Fresh(m.UnitID, 32080, 2, time.Duration(m.MaxAgeS)*time.Second, now)
 	if err != nil {
@@ -147,6 +149,12 @@ func victronPayload(c *RegisterCache, m MQTTConfig, now time.Time) ([]byte, erro
 			return 0, false
 		}
 		if count == 1 {
+			if signed {
+				if regs[0] == 0x8000 {
+					return 0, false
+				}
+				return float64(int16(regs[0])) / gain, true
+			}
 			if regs[0] == 0xffff {
 				return 0, false
 			}
@@ -163,16 +171,28 @@ func victronPayload(c *RegisterCache, m MQTTConfig, now time.Time) ([]byte, erro
 	}
 	// Huawei supplies one measured grid frequency, shared by all three phases.
 	frequency, frequencyOK := optional(32085, 1, false, 100)
+	var totalPF float64
+	var totalPFOK bool
+	if m.EstimatePhasePower {
+		totalPF, totalPFOK = optional(32084, 1, true, 1000)
+		totalPFOK = totalPFOK && math.Abs(totalPF) <= 1
+	}
 	for i := uint16(0); i < 3; i++ {
-		phase := map[string]float64{}
-		if voltage, ok := optional(32069+i, 1, false, 10); ok {
+		phase := map[string]any{}
+		voltage, voltageOK := optional(32069+i, 1, false, 10)
+		current, currentOK := optional(32072+2*i, 2, true, 1000)
+		if voltageOK {
 			phase["voltage"] = voltage
 		}
-		if current, ok := optional(32072+2*i, 2, true, 1000); ok {
+		if currentOK {
 			phase["current"] = current
 		}
 		if frequencyOK {
 			phase["frequency"] = frequency
+		}
+		if m.EstimatePhasePower && voltageOK && currentOK && totalPFOK {
+			phase["power"] = math.Round(voltage*current*totalPF*100) / 100
+			phase["power_is_estimate"] = true
 		}
 		if len(phase) > 0 {
 			pv[fmt.Sprintf("L%d", i+1)] = phase

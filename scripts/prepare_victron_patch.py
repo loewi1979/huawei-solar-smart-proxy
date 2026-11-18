@@ -19,7 +19,9 @@ capture = '''                # Preserve measured phase diagnostics independently
                         raw = jsonpayload["pv"].get(phase, {})
                         pv_measured_phases[phase] = {}
                         if isinstance(raw, dict):
-                            for field in ("voltage", "current", "frequency"):
+                            for field in ("voltage", "current", "frequency", "power"):
+                                if field == "power" and raw.get("power_is_estimate") is not True:
+                                    continue
                                 value = raw.get(field)
                                 if type(value) in (int, float) and value == value and abs(value) != float("inf"):
                                     pv_measured_phases[phase][field] = float(value)
@@ -36,7 +38,7 @@ addition = '''            # Huawei has no individual phase active power / energy
                     for field in ("Power", "Current", "Voltage", "Frequency", "PowerFactor", "Energy/Forward"):
                         self._dbusservice["/Ac/" + phase + "/" + field] = None
                     measured = globals().get("pv_measured_phases", {}).get(phase, {})
-                    for wire, path in (("voltage", "Voltage"), ("current", "Current"), ("frequency", "Frequency")):
+                    for wire, path in (("voltage", "Voltage"), ("current", "Current"), ("frequency", "Frequency"), ("power", "Power")):
                         self._dbusservice["/Ac/" + phase + "/" + path] = measured.get(wire)
 
 '''

@@ -12,7 +12,7 @@ Standalone Go Modbus TCP caching proxy for Huawei SUN2000-10KTL-M1 via SDongleA-
 - Read-only defaults. Write and unknown-read forwarding require explicit settings. Modbus is unauthenticated and needs network isolation.
 - `read_only: false` enables standard register writes and HA's Huawei login exchange. The default is `true`; the legacy `allow_writes` alias cannot be combined with it. Inverter permissions still apply.
 - Optional embedded MQTT broker with credentials, read-only subscribers and optional TLS; alternatively an external broker with validated TLS. Non-retained QoS 0 measurements with no persisted measurement queue.
-- Victron JSON topic `huawei_wechselrichter`: measured total active power/yield, plus available phase AC voltages/currents and measured grid frequency. No invented phase powers, power factors or energy counters.
+- Victron JSON topic `huawei_wechselrichter`: measured total active power/yield, available phase AC voltages/currents and measured grid frequency. Optional phase-power estimates use total PF and are labelled; no phase PF or energy counters are invented.
 - Authenticated YAML editor, backup download, restore upload, strict validation, atomic replacement, previous-file rollback, offline validation/rollback commands. Saved settings activate on explicit restart.
 - Native/systemd and Docker documentation, automated failure tests, vulnerability scanning and CI.
 
@@ -61,6 +61,12 @@ Huawei provides one measured grid frequency in Hz, shared by all three phases.
 Optional phase fields are omitted when missing, stale or invalid. The M1 has
 no unambiguous single aggregate voltage/current, so those top-level fields are
 omitted, along with unmeasured phase powers, phase PF and phase energy counters.
+Set `mqtt.estimate_phase_power: true` to explicitly add approximate `Lx.power`
+in W as phase V × phase A × measured total PF (32084 /1000). Each estimate is
+labelled `power_is_estimate: true`. Default is false. Every input must be fresh
+and valid; otherwise that estimate is omitted. The same PF is assumed for all
+phases, so estimates can differ from real phase powers and need not sum to the
+measured aggregate. Aggregate power is never replaced or normalized.
 They are published at `mqtt.interval_s`, only while both samples meet
 `mqtt.max_age_s`. Measurements use QoS 0, are not retained, and stop when stale;
 the separate `/status` topic reports availability. Smartmeter grid flow is a
@@ -74,6 +80,11 @@ companion patch preserves measured phase diagnostics without inventing phase
 power/energy. GX/ESS behavior must still be tested before deployment. On silence,
 the receiver exits only after its nonzero timeout; `timeout = 0` can preserve
 stale values indefinitely.
+With phase-power estimates enabled, stock parsing recognizes the phase blocks
+and uses the supplied V/A/Hz, but ignores the estimate label in its display and
+may retain fields omitted by later messages. The companion patch preserves
+explicitly labelled estimates and clears omitted fields. No GX is changed by
+installing the publisher update.
 
 ## Documentation
 

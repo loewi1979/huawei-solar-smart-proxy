@@ -70,6 +70,22 @@ if "--aggregate-only" in sys.argv:
     assert fake._dbusservice["/Ac/L2/Voltage"] is None
 else:
     assert fake._dbusservice["/Ac/L1/Voltage"] == 230, "Stock driver unexpectedly read phase voltage without phase power"
+scope["time"] = lambda: 164
+wire = {"pv": {"power": 1234, "energy_forward": 123.45,
+               "L1": {"power": 1000, "power_is_estimate": True, "voltage": 230.7, "current": 4.4, "frequency": 50.01},
+               "L2": {"power": 2000, "voltage": 231.2, "current": 8.7}}}
+scope["on_message"](None, None, SimpleNamespace(topic="huawei_wechselrichter", payload=json.dumps(wire).encode()))
+scope["_update"](fake)
+assert fake._dbusservice["/Ac/Power"] == 1234
+assert fake._dbusservice["/Ac/L1/Power"] == 1000
+assert fake._dbusservice["/Ac/L1/Voltage"] == 230.7
+if "--aggregate-only" in sys.argv:
+    assert fake._dbusservice["/Ac/L2/Power"] is None, "Unlabelled estimate accepted in aggregate mode"
+    assert fake._dbusservice["/Ac/L1/Energy/Forward"] is None
+    scope["time"] = lambda: 165
+    scope["on_message"](None, None, SimpleNamespace(topic="huawei_wechselrichter", payload=b'{"pv":{"power":1234,"energy_forward":123.45}}'))
+    scope["_update"](fake)
+    assert fake._dbusservice["/Ac/L1/Power"] is None, "Omitted estimate held stale"
 last_sample_time = scope["last_changed"]
 scope["time"] = lambda: 180
 scope["on_message"](None, None, SimpleNamespace(topic="huawei_wechselrichter/status", payload=b'"stale"'))

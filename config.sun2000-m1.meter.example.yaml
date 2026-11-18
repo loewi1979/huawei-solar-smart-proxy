@@ -34,6 +34,7 @@ mqtt:
   unit_id: 1
   interval_s: 2
   max_age_s: 30
+  estimate_phase_power: false # Opt-in V * I * total PF approximation, labelled in JSON
   tls_cert: ""
   tls_key: ""
 register_groups:

@@ -15,8 +15,8 @@ Topic: `huawei_wechselrichter`, non-retained QoS 0 telemetry, clean sessions.
 
 `power` is measured signed total active power (holding registers 32080–32081,
 W). `energy_forward` is measured accumulated yield (32106–32107, raw / 100
-kWh). Both samples must be present and fresh. The publisher does not derive
-phase powers from voltage/current or the total power factor, split energy
+kWh). Both samples must be present and fresh. By default the publisher does not
+derive phase powers, split energy
 between phases, or publish a fabricated zero when data are unavailable.
 
 Available optional AC diagnostics are published independently under L1/L2/L3:
@@ -34,6 +34,33 @@ not available for this M1, so no averaging, summing or L1 substitution is used.
 Per-phase active power, PF and lifetime energy are absent because dedicated
 inverter measurements are not available. Smartmeter phase power is grid
 import/export and must not be relabelled as inverter PV phase power.
+
+### Explicit opt-in phase-power estimates
+
+`mqtt.estimate_phase_power` defaults to false. When explicitly enabled, each
+phase receives `power` = phase voltage × phase current × measured **total**
+power factor, rounded to 0.01 W, and `power_is_estimate: true`. Total PF is signed
+I16 register 32084 /1000 and must be fresh, non-sentinel and within [-1, 1].
+Voltage and current must also be fresh and valid. No fallback PF of 1 is used.
+If an input is unavailable, omit that estimate and its flag; measured zero is
+valid. Phase PF and energy remain absent, and aggregate power/energy remain
+the inverter's measurements.
+
+This assumes the same power factor on all phases. It is an approximation, not
+a measured per-phase active power. Different actual phase PFs, asynchronous
+measurements and rounding can make the sum differ from measured total power;
+no artificial normalization is applied. MQTT carries the estimate marker, but
+the stock Victron UI does not display that marker.
+
+Illustrative phase object when enabled:
+
+```json
+{"voltage":230.0,"current":10.0,"frequency":50.0,"power":2070.0,"power_is_estimate":true}
+```
+
+Here the measured total PF is 0.9. Supplying `Lx.power` makes the reviewed stock
+receiver parse that phase's V/A/Hz. It can still retain optional fields omitted
+by later messages, so the companion patch remains useful for failure handling.
 
 The generic upstream register map is retained; M1 firmware support must still
 be checked against the actual device. PV input power must not be confused with
@@ -53,7 +80,8 @@ not make the stock receiver use them; do not fabricate phase power as a workarou
 `victron-aggregate-only.patch` is a separate, opt-in companion patch, prepared
 against the exact commit above. With `[PV] aggregate_only = 1`, it leaves total
 power and total energy available, clears unmeasured aggregate voltage/current
-and phase power/PF/energy paths to `None`, and preserves optional measured
+and phase PF/energy paths to `None`, leaves phase power unavailable unless
+labelled `power_is_estimate: true`, and preserves optional measured
 phase voltage/current/frequency independently of phase power. Omitted optional
 fields are cleared on the next valid PV message so old phase readings do not
 remain displayed. It does not change the timeout.

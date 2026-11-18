@@ -6,6 +6,82 @@ import (
 	"time"
 )
 
+func TestEstimatedPhasePowerUsesFreshTotalPF(t *testing.T) {
+	c := testCache(t)
+	m := defaultMQTTConfig()
+	c.Set(1, 32080, []uint16{0, 1234})
+	c.Set(1, 32106, []uint16{0, 12345})
+	c.Set(1, 32069, []uint16{2300})
+	c.Set(1, 32072, []uint16{0, 10000})
+	c.Set(1, 32085, []uint16{5000})
+	c.Set(1, 32084, []uint16{900})
+	read := func() map[string]any {
+		t.Helper()
+		data, err := victronPayload(c, m, time.Now())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]map[string]any
+		if err := json.Unmarshal(data, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["pv"]["power"] != float64(1234) || payload["pv"]["energy_forward"] != 123.45 {
+			t.Fatal("estimate changed measured aggregate values")
+		}
+		phase := payload["pv"]["L1"].(map[string]any)
+		if _, ok := phase["power_factor"]; ok {
+			t.Fatal("total PF mislabelled as phase PF")
+		}
+		if _, ok := phase["energy_forward"]; ok {
+			t.Fatal("phase energy invented")
+		}
+		return phase
+	}
+	if _, ok := read()["power"]; ok {
+		t.Fatal("estimates enabled by default")
+	}
+	m.EstimatePhasePower = true
+	for _, tc := range []struct {
+		name    string
+		raw     uint16
+		seconds int
+		valid   bool
+		watts   float64
+	}{
+		{"pf-0.9", 900, 0, true, 2070}, {"pf-1", 1000, 0, true, 2300},
+		{"pf-zero", 0, 0, true, 0}, {"negative-pf", 0xfe0c, 0, true, -1150},
+		{"invalid-sentinel", 0x8000, 0, false, 0}, {"out-of-range", 1001, 0, false, 0},
+		{"stale-pf", 900, -31, false, 0}, {"future-pf", 900, 5, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c.BatchSet([]PendingWrite{{UnitID: 1, Address: 32084, Values: []uint16{tc.raw}, UpdatedAt: time.Now().Add(time.Duration(tc.seconds) * time.Second)}})
+			phase := read()
+			_, exists := phase["power"]
+			if exists != tc.valid {
+				t.Fatalf("unexpected estimate availability: %v", phase)
+			}
+			if tc.valid && (phase["power"] != tc.watts || phase["power_is_estimate"] != true) {
+				t.Fatalf("wrong estimate: %v", phase)
+			}
+			if !tc.valid {
+				if _, ok := phase["power_is_estimate"]; ok {
+					t.Fatal("flag without estimate")
+				}
+			}
+		})
+	}
+	c.Set(1, 32084, []uint16{900})
+	c.BatchSet([]PendingWrite{{UnitID: 1, Address: 32069, Values: []uint16{2300}, UpdatedAt: time.Now().Add(-31 * time.Second)}})
+	if _, ok := read()["power"]; ok {
+		t.Fatal("stale voltage used in estimate")
+	}
+	c.Set(1, 32069, []uint16{2300})
+	c.BatchSet([]PendingWrite{{UnitID: 1, Address: 32072, Values: []uint16{0, 10000}, UpdatedAt: time.Now().Add(-31 * time.Second)}})
+	if _, ok := read()["power"]; ok {
+		t.Fatal("stale current used in estimate")
+	}
+}
+
 func TestMeasuredPhasePayload(t *testing.T) {
 	c := testCache(t)
 	m := defaultMQTTConfig()
