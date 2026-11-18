@@ -68,6 +68,7 @@ The stock mr-manuel driver copies aggregate values to L1 when phase powers are a
 - [Deployment, configuration, rollback and controlled rollout](docs/DEPLOYMENT.md)
 - [Victron payload, exact driver behavior and receiver tests](docs/VICTRON.md)
 - [Fast-poll tuning and optional contiguous-read example](docs/FAST_POLLING.md)
+- [HA inventory coverage and inverter/meter polling profile](docs/POLLING_PROFILE.md)
 - [Upstream baseline and initial risks](docs/UPSTREAM_REVIEW.md)
 - [Security review and remaining limits](docs/SECURITY_REVIEW.md)
 - [Preserved upstream README](docs/UPSTREAM_README.md)

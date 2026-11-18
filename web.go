@@ -203,6 +203,9 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 			if f.Unit1 && uid != w.cfg.Inverter.UnitIDs[0] {
 				continue
 			}
+			if !w.cfg.KnownRange(f.Address, f.Length) {
+				continue
+			}
 			val := DecodeDashboardField(f, w.cache, uid)
 			if _, _, err := w.cache.Fresh(uid, f.Address, f.Length, w.cfg.MaxAge(f.Address, f.Length), now); err != nil {
 				val = "Unavailable / stale"
