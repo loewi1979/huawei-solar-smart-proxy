@@ -29,6 +29,7 @@ type Reader struct {
 	cfg        *Config
 	client     *InverterClient
 	cache      *RegisterCache
+	cadence    pollingCadence
 	fastGroups []RegisterGroup
 	slowGroups []RegisterGroup
 
@@ -195,91 +196,64 @@ func (r *Reader) InitialScan(ctx context.Context) error {
 // Run starts the continuous reader loop. It reads fast groups every cycle
 // and slow groups when their interval has elapsed.
 func (r *Reader) Run(ctx context.Context) {
-	slog.Info("reader loop started",
-		"fast_groups", len(r.fastGroups),
-		"slow_groups", len(r.slowGroups),
-		"slow_interval", r.cfg.SlowInterval(),
-	)
-
-	lastSlowPoll := time.Now() // slow groups were just read in InitialScan
-
-	for {
-		if ctx.Err() != nil {
-			slog.Info("reader loop stopped")
-			return
+	type job struct {
+		group RegisterGroup
+		unit  byte
+		due   time.Time
+	}
+	var jobs []job
+	for _, g := range r.cfg.RegisterGroups {
+		for _, u := range r.cfg.Inverter.UnitIDs {
+			jobs = append(jobs, job{group: g, unit: u})
 		}
-
-		cycleStart := time.Now()
-		var batch []PendingWrite
-
-		// Read each fast group across all unit IDs before moving to the next group,
-		// so that the same register group is temporally coherent across units.
-		for _, g := range r.fastGroups {
-			for _, uid := range r.cfg.Inverter.UnitIDs {
-				if ctx.Err() != nil {
-					return
+	}
+	lastClean := time.Now()
+	for ctx.Err() == nil {
+		if time.Since(lastClean) >= r.cfg.SlowInterval() {
+			r.cache.DeleteStale(r.cfg.CacheTTL())
+			lastClean = time.Now()
+		}
+		now := time.Now()
+		chosen := -1
+		wake := now.Add(time.Second)
+		for i, j := range jobs {
+			if j.due.After(now) {
+				if j.due.Before(wake) {
+					wake = j.due
 				}
-				data, err := r.readGroup(ctx, uid, g)
-				if err != nil {
-					slog.Warn("failed to read register group",
-						"unit_id", uid,
-						"name", g.Name,
-						"error", err,
-					)
-				} else {
-					batch = append(batch, PendingWrite{
-						UnitID:  uid,
-						Address: g.Address,
-						Values:  bytesToUint16(data),
-					})
-				}
+				continue
+			}
+			if chosen < 0 || (j.group.Poll == "fast" && jobs[chosen].group.Poll != "fast") ||
+				(j.group.Poll == jobs[chosen].group.Poll && (j.group.Priority > jobs[chosen].group.Priority || j.group.Priority == jobs[chosen].group.Priority && j.due.Before(jobs[chosen].due))) {
+				chosen = i
 			}
 		}
-
-		// Check if slow groups are due
-		if time.Since(lastSlowPoll) >= r.cfg.SlowInterval() {
-			slog.Debug("reading slow groups")
-			for _, g := range r.slowGroups {
-				for _, uid := range r.cfg.Inverter.UnitIDs {
-					if ctx.Err() != nil {
-						return
-					}
-					data, err := r.readGroup(ctx, uid, g)
-					if err != nil {
-						slog.Warn("failed to read register group",
-							"unit_id", uid,
-							"name", g.Name,
-							"error", err,
-						)
-					} else {
-						batch = append(batch, PendingWrite{
-							UnitID:  uid,
-							Address: g.Address,
-							Values:  bytesToUint16(data),
-						})
-					}
-				}
+		if chosen < 0 {
+			if sleepCtx(ctx, time.Until(wake)) != nil {
+				return
 			}
-			lastSlowPoll = time.Now()
-
-			// Clean up stale registers
-			if deleted := r.cache.DeleteStale(r.cfg.CacheTTL()); deleted > 0 {
-				slog.Info("cache: deleted stale registers", "count", deleted)
-			}
+			continue
 		}
-
-		// Flush all reads to cache in a single atomic transaction
-		r.cache.BatchSet(batch)
-
-		cycleDur := time.Since(cycleStart)
+		j := &jobs[chosen]
+		started := time.Now()
+		data, err := r.client.ReadRegisters(j.unit, j.group.Address, j.group.Count)
+		if err == nil && len(data) == int(j.group.Count)*2 {
+			acquiredAt := time.Now()
+			if r.cache.BatchSet([]PendingWrite{{UnitID: j.unit, Address: j.group.Address, Values: bytesToUint16(data), UpdatedAt: acquiredAt}}) == nil {
+				r.cadence.record(j.unit, j.group.Name, acquiredAt)
+			}
+		} else {
+			slog.Warn("poll failed", "group", j.group.Name, "unit", j.unit, "error", err)
+			r.client.Reconnect()
+		}
+		interval := r.cfg.SlowInterval()
+		if j.group.Poll == "fast" {
+			interval = time.Duration(r.cfg.Polling.FastIntervalS) * time.Second
+		}
+		j.due = time.Now().Add(interval)
 		r.cycleCount.Add(1)
 		r.lastCycleTime.Store(time.Now())
-		r.lastCycleDur.Store(int64(cycleDur))
-
-		slog.Debug("fast cycle complete",
-			"duration", cycleDur.Round(time.Millisecond).String(),
-			"cached_registers", r.cache.Size(),
-		)
+		r.lastCycleDur.Store(int64(time.Since(started)))
 	}
 }
 

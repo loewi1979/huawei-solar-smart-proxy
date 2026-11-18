@@ -1,12 +1,15 @@
-FROM golang:1.24-alpine AS builder
+FROM golang:1.27.4-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go ./
-RUN CGO_ENABLED=0 go build -o /huawei-solar-proxy .
+RUN CGO_ENABLED=0 go build -trimpath -o /huawei-solar-proxy .
 
-FROM alpine:3.21
+FROM scratch
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /huawei-solar-proxy /usr/local/bin/
+USER 10001:10001
+WORKDIR /var/lib/huawei-smart-proxy
 ENTRYPOINT ["huawei-solar-proxy"]
-CMD ["-config", "/etc/huawei-solar-proxy/config.yaml"]
+CMD ["-config", "/etc/huawei-smart-proxy/config.yaml"]

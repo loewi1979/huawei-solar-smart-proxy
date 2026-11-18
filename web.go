@@ -12,6 +12,7 @@ import (
 
 // WebServer serves a status UI for the proxy.
 type WebServer struct {
+	store   *ConfigStore
 	cfg     *Config
 	cache   *RegisterCache
 	reader  atomic.Pointer[Reader]
@@ -35,10 +36,29 @@ func (w *WebServer) SetReader(r *Reader) {
 func (w *WebServer) ListenAndServe(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", w.handleIndex)
+	w.configRoutes(mux)
+	mux.HandleFunc("/healthz", func(rw http.ResponseWriter, r *http.Request) { rw.Write([]byte("ok")) })
+	mux.HandleFunc("/readyz", func(rw http.ResponseWriter, r *http.Request) {
+		for _, u := range w.cfg.Inverter.UnitIDs {
+			for _, g := range w.cfg.RegisterGroups {
+				if g.Poll == "fast" {
+					if _, _, err := w.cache.Fresh(u, g.Address, g.Count, w.cfg.MaxAge(g.Address, g.Count), time.Now()); err != nil {
+						http.Error(rw, "fast measurements unavailable or stale", 503)
+						return
+					}
+				}
+			}
+		}
+		rw.Write([]byte("ready"))
+	})
 
 	srv := &http.Server{
-		Addr:    w.cfg.Web.Listen,
-		Handler: mux,
+		Addr:              w.cfg.Web.Listen,
+		Handler:           w.authorized(mux),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       30 * time.Second,
 	}
 
 	go func() {
@@ -97,12 +117,12 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 
 	// Build address range lookup
 	type addrRange struct {
-		start, end uint16
+		start, end uint32
 		index      int
 	}
 	ranges := make([]addrRange, len(w.cfg.RegisterGroups))
 	for i, g := range w.cfg.RegisterGroups {
-		ranges[i] = addrRange{start: g.Address, end: g.Address + g.Count, index: i}
+		ranges[i] = addrRange{start: uint32(g.Address), end: uint32(g.Address) + uint32(g.Count), index: i}
 	}
 
 	// Group registers by unit ID, then by register group
@@ -142,7 +162,7 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 
 		found := false
 		for _, ar := range ranges {
-			if reg.Address >= ar.start && reg.Address < ar.end {
+			if uint32(reg.Address) >= ar.start && uint32(reg.Address) < ar.end {
 				unitMap[reg.UnitID][ar.index].Registers = append(unitMap[reg.UnitID][ar.index].Registers, reg)
 				found = true
 				break
@@ -183,7 +203,13 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 			if f.Unit1 && uid != w.cfg.Inverter.UnitIDs[0] {
 				continue
 			}
+			if !w.cfg.KnownRange(f.Address, f.Length) {
+				continue
+			}
 			val := DecodeDashboardField(f, w.cache, uid)
+			if _, _, err := w.cache.Fresh(uid, f.Address, f.Length, w.cfg.MaxAge(f.Address, f.Length), now); err != nil {
+				val = "Unavailable / stale"
+			}
 			if val == "" {
 				continue
 			}
@@ -195,6 +221,7 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	data := struct {
+		Cadence    []PollingCadenceStat
 		Config     *Config
 		Stats      ReaderStats
 		Uptime     time.Duration
@@ -215,8 +242,12 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		Dashboards: dashboards,
 		Units:      units,
 	}
+	if reader != nil {
+		data.Cadence = reader.CadenceStats(now)
+	}
 
 	tmpl, err := template.New("index").Funcs(template.FuncMap{
+		"seconds": func(d time.Duration) string { return fmt.Sprintf("%.2f s", d.Seconds()) },
 		"hexAddr": func(a uint16) string { return fmt.Sprintf("0x%04X", a) },
 		"hexVal":  func(v uint16) string { return fmt.Sprintf("0x%04X", v) },
 		"relTime": func(t time.Time) string {
@@ -255,7 +286,7 @@ const indexTemplate = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="5">
-<title>Huawei Solar Proxy</title>
+<title>Huawei Solar Smart Proxy</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f5f5f5; color: #333; padding: 1rem; }
@@ -283,7 +314,8 @@ const indexTemplate = `<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>Huawei Solar Proxy</h1>
+<h1>Huawei Solar Smart Proxy</h1>
+<p><a href="/config">Configuration · Backup &amp; restore</a></p>
 
 <div class="cards">
   <div class="card">
@@ -293,12 +325,15 @@ const indexTemplate = `<!DOCTYPE html>
       <dt>Unit IDs</dt><dd>{{range $i, $uid := .Config.Inverter.UnitIDs}}{{if $i}}, {{end}}{{$uid}}{{end}}</dd>
       <dt>Modbus Server</dt><dd>{{.Config.Server.Listen}}</dd>
       <dt>Forward Unknown</dt><dd>{{.Config.ForwardUnknownReads}}</dd>
+      <dt>Read Only</dt><dd>{{.Config.ReadOnly}}</dd>
     </dl>
   </div>
   <div class="card">
     <h2>Polling</h2>
     <dl>
       <dt>Read Pause</dt><dd>{{.Config.Polling.ReadPauseMs}}ms</dd>
+      <dt>Fast Interval</dt><dd>{{.Config.Polling.FastIntervalS}}s</dd>
+      <dt>Fast / Slow Max Age</dt><dd>{{.Config.Polling.FastMaxAgeS}}s / {{.Config.Polling.SlowMaxAgeS}}s</dd>
       <dt>Slow Interval</dt><dd>{{.Config.Polling.SlowIntervalS}}s</dd>
       <dt>Fast Groups</dt><dd>{{.FastGroups}}</dd>
       <dt>Slow Groups</dt><dd>{{.SlowGroups}}</dd>
@@ -308,13 +343,37 @@ const indexTemplate = `<!DOCTYPE html>
     <h2>Runtime</h2>
     <dl>
       <dt>Uptime</dt><dd>{{.Uptime}}</dd>
-      <dt>Cycles</dt><dd>{{.Stats.CycleCount}}</dd>
-      <dt>Last Cycle</dt><dd>{{if .Stats.LastCycleTime.IsZero}}-{{else}}{{relTime .Stats.LastCycleTime}}{{end}}</dd>
-      <dt>Cycle Duration</dt><dd>{{if eq .Stats.CycleCount 0}}-{{else}}{{.Stats.LastCycleDur}}{{end}}</dd>
+      <dt>Poll Attempts</dt><dd>{{.Stats.CycleCount}}</dd>
+      <dt>Last Poll Attempt</dt><dd>{{if .Stats.LastCycleTime.IsZero}}-{{else}}{{relTime .Stats.LastCycleTime}}{{end}}</dd>
+      <dt>Request Duration</dt><dd>{{if eq .Stats.CycleCount 0}}-{{else}}{{.Stats.LastCycleDur}}{{end}}</dd>
       <dt>Cached Registers</dt><dd>{{.CacheSize}}</dd>
     </dl>
   </div>
 </div>
+
+{{if .Cadence}}
+<div class="group">
+  <h2 style="font-size: 1.15rem; margin-bottom: .5rem;">Measured polling intervals</h2>
+  <p class="muted" style="margin-bottom: .75rem;">Last 100 successful acquisition intervals per group, since restart. Unchanged measurements count; failure and reconnect delays are included in the next successful interval.</p>
+  <div style="overflow-x: auto;">
+  <table>
+    <thead><tr><th>Unit / Group</th><th>Tier</th><th>Intervals</th><th>Median</th><th>Last / Longest</th><th>Last success</th><th>Suggested HA interval</th></tr></thead>
+    <tbody>
+    {{range .Cadence}}
+      <tr>
+        <td>{{.UnitID}} / {{.Group}}</td><td>{{.Poll}}</td><td>{{.Samples}} / 100</td>
+        <td>{{if .Samples}}{{seconds .Median}}{{else}}Collecting…{{end}}</td>
+        <td>{{if .Samples}}{{seconds .LastGap}} / {{seconds .Maximum}}{{else}}—{{end}}</td>
+        <td>{{if .LastSuccess.IsZero}}Waiting for first success{{else}}{{relTime .LastSuccess}}{{if .Stale}} · stale{{end}}{{end}}</td>
+        <td>{{if eq .Poll "slow"}}—{{else if .Stale}}Unavailable{{else if .RecommendedHASecs}}{{.RecommendedHASecs}} s{{else}}Collecting (minimum 5 intervals){{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted" style="margin-top: .75rem;">HA suggestion: floor(median ÷ 2), minimum 1 second. Available for fresh fast groups after 5 intervals; the window fills up to 100. Refresh inverter and meter devices separately. This only reads the proxy cache, does not speed up the dongle and does not change HA settings automatically.</p>
+</div>
+{{end}}
 
 {{if .Dashboards}}
 <div class="cards">

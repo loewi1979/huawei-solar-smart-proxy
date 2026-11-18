@@ -1,0 +1,31 @@
+name: Tests and security
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    container: golang:1.27.4
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: go test -race -count=1 -timeout=120s ./...
+      - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+      - run: CGO_ENABLED=0 go build -buildvcs=false -trimpath -o /tmp/huawei-solar-proxy .
+      - run: /tmp/huawei-solar-proxy -config config.sun2000-m1.example.yaml -check-config
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: docker build -f Dockerfile.standalone -t huawei-smart-proxy:test .
+      - run: sh scripts/docker_smoke.sh huawei-smart-proxy:test
+  receiver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: |
+          git clone https://github.com/mr-manuel/venus-os_dbus-mqtt-pv.git /tmp/venus-mqtt-pv
+          git -C /tmp/venus-mqtt-pv checkout 033663ed622c2d7959cde27a03a014463ca1227c
+          python3 scripts/check_victron_driver.py /tmp/venus-mqtt-pv/dbus-mqtt-pv/dbus-mqtt-pv.py
+          python3 scripts/prepare_victron_patch.py /tmp/venus-mqtt-pv/dbus-mqtt-pv/dbus-mqtt-pv.py /tmp/aggregate.patch
+          python3 scripts/check_victron_driver.py /tmp/aggregate.patch.test-driver.py --aggregate-only

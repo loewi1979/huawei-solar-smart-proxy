@@ -1,5 +1,11 @@
 # Huawei Solar Proxy
 
+> Legacy Home Assistant add-on reference. This document describes the retained
+> upstream JSON-options packaging, not the standalone YAML deployment released
+> by this fork. Use [README.md](README.md) and
+> [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for current installation, MQTT,
+> web configuration, freshness checks and write policy.
+
 A Modbus TCP caching proxy for Huawei SUN2000 solar inverters. It sits between Home Assistant and your inverter, continuously polling registers and serving instant cached responses.
 
 ## Why use this?

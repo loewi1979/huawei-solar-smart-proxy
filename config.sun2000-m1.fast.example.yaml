@@ -1,0 +1,42 @@
+# Optional contiguous-read profile; see docs/FAST_POLLING.md. Verify on your firmware.
+inverter:
+  host: "127.0.0.1" # Replace only for an approved dongle test
+  port: 15020
+  unit_ids: [1]
+  timeout_ms: 15000
+  wait_after_connect_ms: 1500
+server:
+  listen: "127.0.0.1:1502"
+web:
+  listen: "127.0.0.1:8080"
+  auth_enabled: true # Explicit false permits status, YAML editing and backups without login
+  token: "" # Set a random >=24-character password to enable config management
+polling:
+  read_pause_ms: 1000
+  fast_interval_s: 2
+  slow_interval_s: 300
+  fast_max_age_s: 30
+  slow_max_age_s: 900
+forward_unknown_reads: false
+read_only: true
+log_level: info
+cache_path: cache.db
+cache_ttl_h: 2
+mqtt:
+  enabled: false
+  embedded: true
+  listen: "127.0.0.1:1883"
+  broker: "tcp://127.0.0.1:1883" # Used only when embedded: false
+  username: gx
+  password: "" # Embedded mode requires a non-empty password; prefer a strong one
+  topic: huawei_wechselrichter
+  unit_id: 1
+  interval_s: 2
+  max_age_s: 30
+  estimate_phase_power: false # Opt-in V * I * total PF approximation
+  tls_cert: ""
+  tls_key: ""
+register_groups:
+  - {name: fast_snapshot, address: 32000, count: 108, poll: fast, priority: 10}
+  - {name: device_info, address: 30000, count: 35, poll: slow}
+  - {name: rated_power, address: 30073, count: 4, poll: slow}

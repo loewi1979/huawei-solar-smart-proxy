@@ -20,9 +20,10 @@ type CachedRegister struct {
 
 // PendingWrite holds a group of register values to be written in a batch.
 type PendingWrite struct {
-	UnitID  byte
-	Address uint16
-	Values  []uint16
+	UpdatedAt time.Time
+	UnitID    byte
+	Address   uint16
+	Values    []uint16
 }
 
 // RegisterCache is a SQLite-backed cache of Modbus register values.
@@ -179,8 +180,6 @@ func (c *RegisterCache) All() []CachedRegister {
 
 // Set stores register values starting at the given address for a unit ID.
 func (c *RegisterCache) Set(unitID byte, address uint16, values []uint16) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-
 	tx, err := c.db.Begin()
 	if err != nil {
 		slog.Warn("cache set: begin tx", "error", err)
@@ -190,7 +189,7 @@ func (c *RegisterCache) Set(unitID byte, address uint16, values []uint16) {
 	stmt := tx.Stmt(c.stmtUpsert)
 	for i, v := range values {
 		addr := int(address) + i
-		if _, err := stmt.Exec(int(unitID), addr, int(v), now); err != nil {
+		if _, err := stmt.Exec(int(unitID), addr, int(v), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 			tx.Rollback()
 			slog.Warn("cache set: exec", "address", addr, "error", err)
 			return
@@ -218,9 +217,9 @@ func (c *RegisterCache) SetFromBytes(unitID byte, address uint16, data []byte) {
 
 // BatchSet writes multiple groups of register values in a single SQLite transaction.
 // This ensures that readers see either all-old or all-new data, never a mix.
-func (c *RegisterCache) BatchSet(writes []PendingWrite) {
+func (c *RegisterCache) BatchSet(writes []PendingWrite) error {
 	if len(writes) == 0 {
-		return
+		return nil
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -228,24 +227,30 @@ func (c *RegisterCache) BatchSet(writes []PendingWrite) {
 	tx, err := c.db.Begin()
 	if err != nil {
 		slog.Warn("cache batch set: begin tx", "error", err)
-		return
+		return err
 	}
 
 	stmt := tx.Stmt(c.stmtUpsert)
 	for _, w := range writes {
+		stamp := now
+		if !w.UpdatedAt.IsZero() {
+			stamp = w.UpdatedAt.UTC().Format(time.RFC3339Nano)
+		}
 		for i, v := range w.Values {
 			addr := int(w.Address) + i
-			if _, err := stmt.Exec(int(w.UnitID), addr, int(v), now); err != nil {
+			if _, err := stmt.Exec(int(w.UnitID), addr, int(v), stamp); err != nil {
 				tx.Rollback()
 				slog.Warn("cache batch set: exec", "unit_id", w.UnitID, "address", addr, "error", err)
-				return
+				return err
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		slog.Warn("cache batch set: commit", "error", err)
+		return err
 	}
+	return nil
 }
 
 // Get retrieves register values for the given unit ID and address range.

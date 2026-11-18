@@ -11,10 +11,13 @@ Project context and instructions for AI assistants working on this codebase.
 - **Single Go package** (`package main`) with focused files:
   - `main.go` — entry point, wiring, signal handling
   - `config.go` — YAML config parsing and validation
-  - `cache.go` — thread-safe `map[uint16]uint16` register cache
-  - `client.go` — Modbus TCP client with mutex serialization and inter-read pause
-  - `reader.go` — continuous polling loop (fast/slow tiers)
-  - `server.go` — Modbus TCP server (serves from cache, forwards writes)
+  - `cache.go`, `freshness.go` — SQLite WAL cache and per-read acquisition-age checks
+  - `client.go` — serialized Modbus client, request/connection pauses and upstream session generation
+  - `reader.go` — due-job polling, with fast jobs ahead of slow jobs
+  - `cadence.go` — bounded per-unit/group acquisition medians and HA interval suggestions
+  - `server.go` — cached reads, read-only policy, optional writes and allowlisted Huawei login forwarding
+  - `mqtt.go` — measured aggregate publisher, embedded read-only-subscriber broker or external broker
+  - `config_web.go`, `web.go` — authenticated YAML backup/restore/rollback and status UI
 
 - **Key dependencies:**
   - `github.com/goburrow/modbus` — Modbus TCP client
@@ -29,8 +32,9 @@ go build -o huawei-solar-proxy .
 
 ## Testing
 
-No inverter needed for compilation checks:
+No inverter is needed for the automated protocol, broker and cache tests:
 ```bash
+go test -race -count=1 ./...
 go vet ./...
 go build ./...
 ```
@@ -39,10 +43,11 @@ Integration testing requires a real inverter or a Modbus TCP simulator.
 
 ## Key Design Decisions
 
-- **500ms inter-read pause**: The inverter becomes unresponsive without gaps between reads. This is enforced in `client.go` via a mutex + sleep.
-- **Two-tier polling**: Fast groups (operational data) every cycle (~3.5s), slow groups (config/device info) every 5 minutes.
-- **Forward unknown reads**: Cache misses are forwarded to the inverter by default, so HA's device detection works without pre-configuring every register.
-- **Write forwarding**: Writes go through the same mutex as reads, ensuring the pause is respected.
+- **Request and connection pauses**: Both apply after reconnects too. The M1 example uses a 1000ms request gap and 1500ms connection quiet period with a 15s timeout. Short dongle timeouts can create late-response/transaction-ID failures.
+- **Two-tier polling**: Fast/slow intervals are minimum waits after completion, not hard real-time guarantees. A request is non-preemptible; slow overload can cause stale values.
+- **Forward unknown reads**: Disabled by default. Known stale ranges are rejected instead of silently forwarded.
+- **Write forwarding**: `read_only: true` by default, enforced at both server and client. In write mode, 0x06/0x10 and allowlisted Huawei login subcommands use the same serialized connection. Upstream exceptions must be preserved for HA's permission/login handling. A reconnect invalidates downstream Huawei authentication.
+- **Freshness**: Successful acquisition timestamps are never replaced on failure. Disk retention is not freshness. MQTT publishes measured aggregates and available phase diagnostics, with opt-in labelled phase-power estimates, non-retained, and becomes silent on staleness.
 - **All registers are holding registers** (function code 0x03). The HA integration never uses input registers (0x04), but the proxy handles both identically for robustness.
 
 ## Register Map
