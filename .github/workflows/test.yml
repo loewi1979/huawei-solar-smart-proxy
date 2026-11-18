@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - run: docker compose config --quiet
       - run: docker build -f Dockerfile.standalone -t huawei-smart-proxy:test .
       - run: sh scripts/docker_smoke.sh huawei-smart-proxy:test
   receiver:

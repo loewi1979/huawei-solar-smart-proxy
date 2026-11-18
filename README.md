@@ -136,11 +136,30 @@ application polling the SDongle directly; point downstream consumers at the prox
 
 ### Docker Compose
 
-From the repository directory:
+The ready-to-run image is published on
+[GitHub Packages](https://github.com/loewi1979/huawei-solar-smart-proxy/pkgs/container/huawei-solar-smart-proxy):
+
+```text
+ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.0
+```
+
+It supports **linux/amd64 and linux/arm64**; Docker selects the matching platform.
+No Go installation, image build or registry login is needed. `1.0.0` pins the
+application version; `latest` follows the newest stable image published here.
+
+Download the Compose file and configuration example into a new directory:
 
 ```sh
 mkdir -p runtime/config runtime/data
-cp config.sun2000-m1.meter.example.yaml runtime/config/config.yaml
+curl -fL https://raw.githubusercontent.com/loewi1979/huawei-solar-smart-proxy/main/compose.yaml -o compose.yaml
+curl -fL https://raw.githubusercontent.com/loewi1979/huawei-solar-smart-proxy/v1.0.0/config.sun2000-m1.meter.example.yaml -o runtime/config/config.yaml
+```
+
+On an existing installation, keep your current YAML instead of downloading
+the example over it. The supplied Compose service uses:
+
+```yaml
+image: ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.0
 ```
 
 Edit `runtime/config/config.yaml` using the same settings as above. Inside
@@ -160,15 +179,23 @@ ports:
 sudo chown -R 10001:10001 runtime
 sudo chmod 700 runtime/config runtime/data
 sudo chmod 600 runtime/config/config.yaml
-docker compose build
+docker compose pull
 docker compose run --rm proxy -config /etc/huawei-smart-proxy/config.yaml -check-config
 docker compose up -d
 docker compose logs -f proxy
 ```
 
-The supplied Compose service uses `Dockerfile.standalone`, runs as non-root
-and mounts the whole configuration directory so backup/restore and atomic
-replacement work. The preserved legacy HA add-on Dockerfile is a separate path.
+The container runs as non-root and mounts the whole configuration directory so
+backup/restore and atomic replacement work. To update later, select the desired
+image version in `compose.yaml`, then run `docker compose pull` and
+`docker compose up -d`. The existing configuration and SQLite data remain in
+the mounted directories. The host port bindings stay loopback unless you
+explicitly change them as shown above.
+
+For a local source build, replace the service's `image` entry with
+`build: {context: ., dockerfile: Dockerfile.standalone}` in a repository checkout
+and use `docker compose build`. The preserved legacy HA add-on Dockerfile is a
+separate path.
 
 ## Home Assistant Configuration
 

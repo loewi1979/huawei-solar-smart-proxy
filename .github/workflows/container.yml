@@ -1,0 +1,106 @@
+name: Publish container image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing stable release tag to publish"
+        required: true
+        default: "v1.0.0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Resolve release source
+        id: source
+        env:
+          REQUESTED_VERSION: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -eu
+          if ! printf '%s\n' "$REQUESTED_VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo 'Select a stable vMAJOR.MINOR.PATCH release tag.' >&2
+            exit 1
+          fi
+          sha=$(git rev-parse --verify "refs/tags/${REQUESTED_VERSION}^{commit}")
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          version="${REQUESTED_VERSION#v}"
+          printf 'sha=%s\nimage=%s\nversion=%s\n' "$sha" "$image" "$version" >> "$GITHUB_OUTPUT"
+          latest=$(git tag --list 'v*' --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)
+          {
+            echo 'tags<<EOF'
+            echo "${image}:${version}"
+            echo "${image}:${REQUESTED_VERSION}"
+            if [ "$REQUESTED_VERSION" = "$latest" ]; then
+              echo "${image}:latest"
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          # Keep the current cross-compiling packaging recipe while building
+          # application source from the exact selected release commit.
+          cp Dockerfile.standalone "$RUNNER_TEMP/Dockerfile.container"
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ steps.source.outputs.sha }}
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
+      - name: Build amd64 candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ runner.temp }}/Dockerfile.container
+          platforms: linux/amd64
+          load: true
+          tags: huawei-smart-proxy:smoke-amd64
+      - name: Test amd64 candidate
+        run: sh scripts/docker_smoke.sh huawei-smart-proxy:smoke-amd64
+      - name: Build arm64 candidate
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ runner.temp }}/Dockerfile.container
+          platforms: linux/arm64
+          load: true
+          tags: huawei-smart-proxy:smoke-arm64
+      - name: Test arm64 candidate under emulation
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/arm64
+        run: sh scripts/docker_smoke.sh huawei-smart-proxy:smoke-arm64
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish multi-platform image
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
+        with:
+          context: .
+          file: ${{ runner.temp }}/Dockerfile.container
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.source.outputs.tags }}
+          labels: |
+            org.opencontainers.image.title=Huawei Solar Smart Proxy
+            org.opencontainers.image.description=Huawei SUN2000 caching proxy for Home Assistant and Victron MQTT
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.source.outputs.version }}
+            org.opencontainers.image.licenses=MIT
