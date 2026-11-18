@@ -126,8 +126,15 @@ medians were approximately 4.5s; maximum inverter/meter intervals were 20.0s
 and 25.0s. The HA-connected test therefore did not show a clear deterioration,
 but these bounded observations do not establish long-term reliability.
 Successful cached reads do not prove that every upstream poll succeeded or
-explain the long acquisition gaps. Correlate them with service JSON warnings;
-journald's priority filter alone does not select embedded JSON `level` fields.
+explain the long acquisition gaps. A subsequently supplied service log confirms
+six upstream TCP read timeouts between 13:42 and 14:26 local time, including one
+inverter fast-block timeout during the HA-connected observation. Affected groups
+were the inverter fast block, meter and slow power-control block. The observed
+cache availability therefore must not be described as error-free upstream
+polling. Several warning intervals were approximately 330s; this suggests a
+periodic cause but does not identify it. FusionSolar upload contention is an
+unverified hypothesis, not an established cause. Journald's priority filter
+alone does not select embedded JSON `level` fields.
 
 ## Write tests
 
