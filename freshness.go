@@ -8,7 +8,21 @@ import (
 // Fresh returns one SQLite snapshot, rejecting missing, malformed, future or old
 // timestamps. Retention/eviction never controls whether a value may be served.
 func (c *RegisterCache) Fresh(unit byte, address, count uint16, maxAge time.Duration, now time.Time) ([]uint16, time.Time, error) {
-	if count == 0 || uint32(address)+uint32(count) > 65536 || maxAge <= 0 {
+	if maxAge <= 0 {
+		return nil, time.Time{}, fmt.Errorf("invalid freshness request")
+	}
+	return c.fresh(unit, address, count, func(uint16) time.Duration { return maxAge }, now)
+}
+
+// FreshConfigured checks each register against its own polling group's age
+// limit, even when one Modbus read spans both fast and slow groups. All values
+// still come from one SQLite query snapshot.
+func (c *RegisterCache) FreshConfigured(unit byte, address, count uint16, cfg *Config, now time.Time) ([]uint16, time.Time, error) {
+	return c.fresh(unit, address, count, func(a uint16) time.Duration { return cfg.MaxAge(a, 1) }, now)
+}
+
+func (c *RegisterCache) fresh(unit byte, address, count uint16, ageFor func(uint16) time.Duration, now time.Time) ([]uint16, time.Time, error) {
+	if count == 0 || uint32(address)+uint32(count) > 65536 {
 		return nil, time.Time{}, fmt.Errorf("invalid freshness request")
 	}
 	rows, err := c.db.Query(`SELECT address,value,updated_at FROM registers WHERE unit_id=? AND address>=? AND address<? ORDER BY address`, int(unit), int(address), int(address)+int(count))
@@ -25,7 +39,8 @@ func (c *RegisterCache) Fresh(unit byte, address, count uint16, maxAge time.Dura
 			return nil, time.Time{}, err
 		}
 		t, err := time.Parse(time.RFC3339Nano, stamp)
-		if err != nil || t.After(now) || now.Sub(t) > maxAge {
+		maxAge := ageFor(uint16(addr))
+		if err != nil || maxAge <= 0 || t.After(now) || now.Sub(t) > maxAge {
 			return nil, time.Time{}, fmt.Errorf("stale cache at %d", addr)
 		}
 		if oldest.IsZero() || t.Before(oldest) {

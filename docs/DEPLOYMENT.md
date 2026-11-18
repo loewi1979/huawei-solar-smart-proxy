@@ -213,7 +213,10 @@ Shorter response timeouts can turn delayed replies into transaction-ID errors.
 Tune from measured reliability; a short smoke test is not an overnight soak.
 
 Read-time age limits are independent of `cache_ttl_h`, which only limits disk
-retention. MQTT requires fresh power AND energy, rechecks freshness after a
+retention. A batched Modbus read crossing polling-group boundaries checks each
+register against its own group's limit in one SQLite snapshot. A slow value's
+longer age allowance never relaxes the freshness required for a fast value.
+MQTT requires fresh power AND energy, rechecks freshness after a
 broker connection delay, and stops telemetry on staleness. `/status` reports
 online/stale/offline but the stock Victron driver does not consume this status.
 See [VICTRON.md](VICTRON.md) before connecting a GX.

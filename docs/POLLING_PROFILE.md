@@ -57,6 +57,25 @@ minutes and additional startup work. Validate their support and timing on the
 actual firmware. Unsupported optional registers must not cause repeated
 reconnects to be mistaken for a healthy profile.
 
+### Hardware check on 2026-11-18
+
+With the approved LAN profile active, a 330s daytime cache/readiness check
+completed 165 reads of each of the eight groups without a failed response.
+Daily yield was valid, status 0x0200 decoded as On-grid, and unconfigured battery
+widgets were absent. A separate 330s observation of dashboard acquisition ages
+confirmed at least one new acquisition for every slow group. Observed maximum
+ages were 301–320s, illustrating the scheduling overhead beyond the 300s wait.
+MQTT remained valid and no automatic service restart was recorded. This checks
+cache availability and refresh progress, not every individual upstream attempt.
+
+An additional combined read of 32106–32119 exposed a freshness boundary bug:
+individual fast and slow reads passed, but the combined response was incorrectly
+limited to 30s for all registers. The regression test exercises a real Modbus
+connection with three-minute-old slow data and fresh fast data. The corrected
+server applies each register's own group age limit within one SQLite snapshot;
+stale fast data is still rejected after 30s and stale slow data after 900s.
+The hardware update for this separate fix requires deployment and verification.
+
 ## Write tests
 
 `read_only: false` explicitly enables forwarding of standard writes and the

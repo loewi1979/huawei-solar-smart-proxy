@@ -242,7 +242,7 @@ func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc
 	}
 
 	// Try cache first
-	values, _, freshErr := s.cache.Fresh(unitID, address, count, s.cfg.MaxAge(address, count), time.Now())
+	values, _, freshErr := s.cache.FreshConfigured(unitID, address, count, s.cfg, time.Now())
 	if freshErr == nil {
 		data := make([]byte, len(values)*2)
 		for i, v := range values {

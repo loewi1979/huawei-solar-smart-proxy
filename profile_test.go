@@ -1,11 +1,62 @@
 package main
 
 import (
+	"context"
+	"encoding/binary"
+	"io"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCombinedFastSlowModbusRead(t *testing.T) {
+	cfg, err := LoadConfig("config.sun2000-m1.meter.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := testCache(t)
+	now := time.Now()
+	c.BatchSet([]PendingWrite{
+		{UnitID: 1, Address: 32106, Values: []uint16{0, 123}, UpdatedAt: now.Add(-time.Second)},
+		{UnitID: 1, Address: 32108, Values: make([]uint16, 12), UpdatedAt: now.Add(-3 * time.Minute)},
+	})
+	a, b := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer b.Close()
+	go NewServer(cfg, c).handleConnection(ctx, a)
+	read := func() []byte {
+		t.Helper()
+		b.SetDeadline(time.Now().Add(time.Second))
+		// A client batches lifetime and daily/monthly/yearly energy together.
+		if _, err := b.Write([]byte{0, 1, 0, 0, 0, 6, 1, 3, 0x7d, 0x6a, 0, 14}); err != nil {
+			t.Fatal(err)
+		}
+		header := make([]byte, 7)
+		if _, err := io.ReadFull(b, header); err != nil {
+			t.Fatal(err)
+		}
+		pdu := make([]byte, int(binary.BigEndian.Uint16(header[4:6]))-1)
+		if _, err := io.ReadFull(b, pdu); err != nil {
+			t.Fatal(err)
+		}
+		return pdu
+	}
+	if pdu := read(); len(pdu) != 30 || pdu[0] != 3 || pdu[1] != 28 {
+		t.Fatalf("valid mixed-age read rejected: %x", pdu)
+	}
+	c.BatchSet([]PendingWrite{{UnitID: 1, Address: 32106, Values: []uint16{0, 123}, UpdatedAt: now.Add(-31 * time.Second)}})
+	if pdu := read(); len(pdu) != 2 || pdu[1] != 0x0b {
+		t.Fatalf("slow allowance hid stale fast data: %x", pdu)
+	}
+	c.Set(1, 32106, []uint16{0, 123})
+	c.BatchSet([]PendingWrite{{UnitID: 1, Address: 32108, Values: make([]uint16, 12), UpdatedAt: now.Add(-901 * time.Second)}})
+	if pdu := read(); len(pdu) != 2 || pdu[1] != 0x0b {
+		t.Fatalf("expired slow data served: %x", pdu)
+	}
+}
 
 func TestMeterProfileCoverageAndDashboard(t *testing.T) {
 	cfg, err := LoadConfig("config.sun2000-m1.meter.example.yaml")
