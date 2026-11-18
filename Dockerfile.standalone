@@ -1,14 +1,29 @@
-FROM golang:1.27.4-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
+RUN mkdir -p /licenses/dependencies && cp /usr/local/go/LICENSE /licenses/Go-LICENSE && \
+    go list -m -f '{{if .Dir}}{{.Path}} {{.Dir}}{{end}}' all | \
+    while read -r module_path module_dir; do \
+      if [ -n "$module_dir" ]; then \
+        mkdir -p "/licenses/dependencies/$module_path"; \
+        find "$module_dir" -maxdepth 1 -type f \
+          \( -iname 'license*' -o -iname 'licence*' -o -iname 'notice*' -o -iname 'copying*' -o -name 'AUTHORS' \) \
+          -exec cp {} "/licenses/dependencies/$module_path/" \; ; \
+      fi; \
+    done
 COPY *.go ./
-RUN CGO_ENABLED=0 go build -trimpath -o /huawei-solar-proxy .
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -buildvcs=false -trimpath -o /huawei-solar-proxy .
 
 FROM scratch
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /huawei-solar-proxy /usr/local/bin/
+COPY --from=builder /licenses /licenses
+COPY LICENSE /licenses/LICENSE
+COPY docs/THIRD_PARTY_NOTICES.md /licenses/THIRD_PARTY_NOTICES.md
 USER 10001:10001
 WORKDIR /var/lib/huawei-smart-proxy
 ENTRYPOINT ["huawei-solar-proxy"]

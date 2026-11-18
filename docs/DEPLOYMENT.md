@@ -138,6 +138,11 @@ without its journal. Read-time freshness still applies after restoring a DB.
 
 ## Docker
 
+The supplied Compose file pulls the public multi-platform image
+`ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.0` (amd64/arm64). No registry
+login or local Go/image build is required. See the README for a download-only
+setup without cloning the repository. Keep the existing YAML on updates.
+
 ```sh
 mkdir -p runtime/config runtime/data
 cp config.sun2000-m1.example.yaml runtime/config/config.yaml
@@ -154,11 +159,17 @@ Mount the whole config directory read/write to allow atomic rename and rollback;
 a read-only single-file mount cannot support restore.
 
 ```sh
-docker compose build
+docker compose pull
 docker compose run --rm proxy -config /etc/huawei-smart-proxy/config.yaml -check-config
 docker compose up -d
 docker compose logs -f
 ```
+
+For updates, change the image version in `compose.yaml`, run
+`docker compose pull`, then `docker compose up -d`. `latest` is available as
+an alternative to a fixed application version. For a source build instead,
+replace the `image` entry with `build: {context: ., dockerfile: Dockerfile.standalone}`
+in a repository checkout and run `docker compose build`.
 
 Scratch runtime, non-root user, read-only root filesystem, no capabilities.
 The provided image needs no Python, SQLite daemon or external MQTT broker.

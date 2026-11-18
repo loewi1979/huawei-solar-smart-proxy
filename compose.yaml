@@ -1,8 +1,6 @@
 services:
   proxy:
-    build:
-      context: .
-      dockerfile: Dockerfile.standalone
+    image: ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.0
     restart: unless-stopped
     user: "10001:10001"
     read_only: true
