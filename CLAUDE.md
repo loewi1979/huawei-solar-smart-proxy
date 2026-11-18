@@ -14,6 +14,7 @@ Project context and instructions for AI assistants working on this codebase.
   - `cache.go`, `freshness.go` — SQLite WAL cache and per-read acquisition-age checks
   - `client.go` — serialized Modbus client, request/connection pauses and upstream session generation
   - `reader.go` — due-job polling, with fast jobs ahead of slow jobs
+  - `cadence.go` — bounded per-unit/group acquisition medians and HA interval suggestions
   - `server.go` — cached reads, read-only policy, optional writes and allowlisted Huawei login forwarding
   - `mqtt.go` — measured aggregate publisher, embedded read-only-subscriber broker or external broker
   - `config_web.go`, `web.go` — authenticated YAML backup/restore/rollback and status UI
@@ -46,7 +47,7 @@ Integration testing requires a real inverter or a Modbus TCP simulator.
 - **Two-tier polling**: Fast/slow intervals are minimum waits after completion, not hard real-time guarantees. A request is non-preemptible; slow overload can cause stale values.
 - **Forward unknown reads**: Disabled by default. Known stale ranges are rejected instead of silently forwarded.
 - **Write forwarding**: `read_only: true` by default, enforced at both server and client. In write mode, 0x06/0x10 and allowlisted Huawei login subcommands use the same serialized connection. Upstream exceptions must be preserved for HA's permission/login handling. A reconnect invalidates downstream Huawei authentication.
-- **Freshness**: Successful acquisition timestamps are never replaced on failure. Disk retention is not freshness. MQTT publishes measured aggregate values only, non-retained, and becomes silent on staleness.
+- **Freshness**: Successful acquisition timestamps are never replaced on failure. Disk retention is not freshness. MQTT publishes measured aggregates and available phase diagnostics, with opt-in labelled phase-power estimates, non-retained, and becomes silent on staleness.
 - **All registers are holding registers** (function code 0x03). The HA integration never uses input registers (0x04), but the proxy handles both identically for robustness.
 
 ## Register Map

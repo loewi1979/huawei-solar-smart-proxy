@@ -12,7 +12,8 @@ holding-register read from 32000 through 32107 (108 registers, below the Modbus
 125-register limit). This covers the existing state, PV, grid-power and total
 energy fields in one acquired snapshot. Reserved/unused words can be present;
 they are raw device responses and are not turned into invented measurements.
-The MQTT publisher still emits only measured aggregate power and total energy.
+The MQTT publisher uses this range for measured aggregate power/energy and
+available phase diagnostics, with separately opt-in labelled phase-power estimates.
 
 This range was accepted in a coordinated read-only SUN2000-10KTL-M1 / SDongleA-05
 test. Support is firmware-specific; some devices can reject ranges containing

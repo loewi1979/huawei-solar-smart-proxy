@@ -29,6 +29,7 @@ type Reader struct {
 	cfg        *Config
 	client     *InverterClient
 	cache      *RegisterCache
+	cadence    pollingCadence
 	fastGroups []RegisterGroup
 	slowGroups []RegisterGroup
 
@@ -237,7 +238,10 @@ func (r *Reader) Run(ctx context.Context) {
 		started := time.Now()
 		data, err := r.client.ReadRegisters(j.unit, j.group.Address, j.group.Count)
 		if err == nil && len(data) == int(j.group.Count)*2 {
-			r.cache.BatchSet([]PendingWrite{{UnitID: j.unit, Address: j.group.Address, Values: bytesToUint16(data), UpdatedAt: time.Now()}})
+			acquiredAt := time.Now()
+			if r.cache.BatchSet([]PendingWrite{{UnitID: j.unit, Address: j.group.Address, Values: bytesToUint16(data), UpdatedAt: acquiredAt}}) == nil {
+				r.cadence.record(j.unit, j.group.Name, acquiredAt)
+			}
 		} else {
 			slog.Warn("poll failed", "group", j.group.Name, "unit", j.unit, "error", err)
 			r.client.Reconnect()

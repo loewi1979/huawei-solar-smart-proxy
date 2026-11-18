@@ -2,6 +2,26 @@
 
 Development review, not an independent penetration test or a production approval.
 
+## Release 1.0 checks — 2026-11-18
+
+- Gitleaks 8.30.1 reported no leaks in the project directory or all reachable
+  Git history before release. Scanner output was redacted; reports remain local.
+- A separate check found no known private deployment credentials, SSH private
+  keys, household addresses, device serial or private access-file references
+  in the release file set. Example placeholders and isolated test credentials
+  are not installation credentials. Private access files stay outside the repo.
+- The complete local Go test suite and vet passed. Govulncheck v1.9.0 reported
+  no vulnerabilities for the scanned target on this date.
+- Actionlint validated the test and release workflows. Release packaging uses
+  `git archive`, so untracked local configuration and tool/access directories
+  cannot enter the published source/binary bundles.
+- The original MIT copyright remains; the fork adds the requested 2026 Jürgen
+  Löw attribution. The optional Victron patch's upstream MIT notice is retained
+  in THIRD_PARTY_NOTICES.md.
+
+These are point-in-time checks, not a guarantee against every possible secret
+or future vulnerability. Linux race, Docker and receiver checks run in CI.
+
 ## Changes made
 
 - Read-time freshness, missing/future timestamp rejection, per-unit isolation,

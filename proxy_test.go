@@ -450,6 +450,9 @@ func TestSimulatorFailureRecovery(t *testing.T) {
 	}
 	cancel()
 	<-done
+	if stat := reader.CadenceStats(time.Now())[0]; stat.LastSuccess.IsZero() {
+		t.Fatal("successful hardware polls were not recorded in cadence statistics")
+	}
 	client.Close()
 	listener.Close()
 	peers.Wait()

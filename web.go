@@ -221,6 +221,7 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	}
 
 	data := struct {
+		Cadence    []PollingCadenceStat
 		Config     *Config
 		Stats      ReaderStats
 		Uptime     time.Duration
@@ -241,8 +242,12 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		Dashboards: dashboards,
 		Units:      units,
 	}
+	if reader != nil {
+		data.Cadence = reader.CadenceStats(now)
+	}
 
 	tmpl, err := template.New("index").Funcs(template.FuncMap{
+		"seconds": func(d time.Duration) string { return fmt.Sprintf("%.2f s", d.Seconds()) },
 		"hexAddr": func(a uint16) string { return fmt.Sprintf("0x%04X", a) },
 		"hexVal":  func(v uint16) string { return fmt.Sprintf("0x%04X", v) },
 		"relTime": func(t time.Time) string {
@@ -345,6 +350,30 @@ const indexTemplate = `<!DOCTYPE html>
     </dl>
   </div>
 </div>
+
+{{if .Cadence}}
+<div class="group">
+  <h2 style="font-size: 1.15rem; margin-bottom: .5rem;">Measured polling intervals</h2>
+  <p class="muted" style="margin-bottom: .75rem;">Last 100 successful acquisition intervals per group, since restart. Unchanged measurements count; failure and reconnect delays are included in the next successful interval.</p>
+  <div style="overflow-x: auto;">
+  <table>
+    <thead><tr><th>Unit / Group</th><th>Tier</th><th>Intervals</th><th>Median</th><th>Last / Longest</th><th>Last success</th><th>Suggested HA interval</th></tr></thead>
+    <tbody>
+    {{range .Cadence}}
+      <tr>
+        <td>{{.UnitID}} / {{.Group}}</td><td>{{.Poll}}</td><td>{{.Samples}} / 100</td>
+        <td>{{if .Samples}}{{seconds .Median}}{{else}}Collecting…{{end}}</td>
+        <td>{{if .Samples}}{{seconds .LastGap}} / {{seconds .Maximum}}{{else}}—{{end}}</td>
+        <td>{{if .LastSuccess.IsZero}}Waiting for first success{{else}}{{relTime .LastSuccess}}{{if .Stale}} · stale{{end}}{{end}}</td>
+        <td>{{if eq .Poll "slow"}}—{{else if .Stale}}Unavailable{{else if .RecommendedHASecs}}{{.RecommendedHASecs}} s{{else}}Collecting (minimum 5 intervals){{end}}</td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted" style="margin-top: .75rem;">HA suggestion: floor(median ÷ 2), minimum 1 second. Available for fresh fast groups after 5 intervals; the window fills up to 100. Refresh inverter and meter devices separately. This only reads the proxy cache, does not speed up the dongle and does not change HA settings automatically.</p>
+</div>
+{{end}}
 
 {{if .Dashboards}}
 <div class="cards">

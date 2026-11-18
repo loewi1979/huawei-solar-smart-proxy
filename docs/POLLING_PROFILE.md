@@ -149,8 +149,10 @@ A successful Modbus write acknowledgement is not an independent hardware
 readback: the proxy mirrors the acknowledged value in its cache. The slow poll
 reads the device again within the configured five-minute schedule, subject to
 request delays. Check that independent refresh before treating a parameter as
-persisted. Real hardware writes and installed HA authentication compatibility
-remain acceptance tests until explicitly exercised.
+persisted. The operator subsequently confirmed working hardware control through
+HA for inverter on/off, percentage power derating and fixed power derating.
+The dashboard showed "Shutdown command" after shutdown. This confirms those
+controls on the installation, not every write register or persistence after reboot.
 
 Reference definitions were checked against the installed Huawei HA component
 and the source definitions in [huawei-solar-lib](https://github.com/wlcrs/huawei-solar-lib/tree/aaefb69f2d985826bf34603f341cd3ad3bd296f8).

@@ -217,9 +217,9 @@ func (c *RegisterCache) SetFromBytes(unitID byte, address uint16, data []byte) {
 
 // BatchSet writes multiple groups of register values in a single SQLite transaction.
 // This ensures that readers see either all-old or all-new data, never a mix.
-func (c *RegisterCache) BatchSet(writes []PendingWrite) {
+func (c *RegisterCache) BatchSet(writes []PendingWrite) error {
 	if len(writes) == 0 {
-		return
+		return nil
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -227,7 +227,7 @@ func (c *RegisterCache) BatchSet(writes []PendingWrite) {
 	tx, err := c.db.Begin()
 	if err != nil {
 		slog.Warn("cache batch set: begin tx", "error", err)
-		return
+		return err
 	}
 
 	stmt := tx.Stmt(c.stmtUpsert)
@@ -241,14 +241,16 @@ func (c *RegisterCache) BatchSet(writes []PendingWrite) {
 			if _, err := stmt.Exec(int(w.UnitID), addr, int(v), stamp); err != nil {
 				tx.Rollback()
 				slog.Warn("cache batch set: exec", "unit_id", w.UnitID, "address", addr, "error", err)
-				return
+				return err
 			}
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		slog.Warn("cache batch set: commit", "error", err)
+		return err
 	}
+	return nil
 }
 
 // Get retrieves register values for the given unit ID and address range.
