@@ -139,7 +139,7 @@ without its journal. Read-time freshness still applies after restoring a DB.
 ## Docker
 
 The supplied Compose file pulls the public multi-platform image
-`ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.0` (amd64/arm64). No registry
+`ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.1` (amd64/arm64). No registry
 login or local Go/image build is required. See the README for a download-only
 setup without cloning the repository. Keep the existing YAML on updates.
 

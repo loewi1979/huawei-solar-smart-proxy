@@ -1,3 +1,5 @@
+// These tests exercise phase diagnostics and estimates using cached Huawei words.
+
 package main
 
 import (
@@ -6,6 +8,8 @@ import (
 	"time"
 )
 
+// TestEstimatedPhasePowerUsesFreshTotalPF checks the opt-in estimate across
+// valid, invalid, and expired inputs while verifying the measured aggregates.
 func TestEstimatedPhasePowerUsesFreshTotalPF(t *testing.T) {
 	c := testCache(t)
 	m := defaultMQTTConfig()
@@ -82,6 +86,8 @@ func TestEstimatedPhasePowerUsesFreshTotalPF(t *testing.T) {
 	}
 }
 
+// TestMeasuredPhasePayload checks scaling, signed current, measured zero,
+// independently available diagnostics, and isolation between inverter units.
 func TestMeasuredPhasePayload(t *testing.T) {
 	c := testCache(t)
 	m := defaultMQTTConfig()

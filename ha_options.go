@@ -1,5 +1,8 @@
 package main
 
+// HA add-on options are translated into the same Config used in standalone
+// mode. The add-on uses a fixed cache location and built-in register groups.
+
 import (
 	"encoding/json"
 	"fmt"
@@ -20,7 +23,8 @@ type HAOptions struct {
 	HasPowerMeter       bool   `json:"has_power_meter"`
 }
 
-// LoadHAOptions reads the HA options JSON file and converts it to a Config.
+// LoadHAOptions reads and validates the add-on's JSON options. The generated
+// configuration enables read-only mode and adds groups for enabled hardware.
 func LoadHAOptions(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -48,6 +52,7 @@ func LoadHAOptions(path string) (*Config, error) {
 	if len(opts.UnitIDs) == 0 {
 		return nil, fmt.Errorf("unit_ids: at least one unit ID is required")
 	}
+	// Validate IDs before narrowing them to the one-byte Modbus unit field.
 	unitIDs := make([]byte, len(opts.UnitIDs))
 	for i, id := range opts.UnitIDs {
 		if id < 1 || id > 247 {
@@ -92,21 +97,19 @@ func LoadHAOptions(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// defaultRegisterGroups returns the built-in register groups matching
-// config.example.yaml. Battery and meter groups are conditional.
+// defaultRegisterGroups builds the add-on's polling map. It includes the
+// inverter ranges and adds meter and battery ranges when enabled.
 func defaultRegisterGroups(hasBattery, hasPowerMeter bool) []RegisterGroup {
-	// Base groups — always included
 	groups := []RegisterGroup{
-		// Fast groups (operational data, every cycle)
+		// Operational data uses the fast polling interval.
 		{Name: "inverter_state", Address: 32000, Count: 11, Poll: "fast"},
 		{Name: "pv_strings", Address: 32016, Count: 48, Poll: "fast"},
 		{Name: "grid_power", Address: 32064, Count: 33, Poll: "fast"},
 		{Name: "energy_yield", Address: 32106, Count: 14, Poll: "fast"},
 
-		// Slow groups (device info & config, every 5 minutes)
-		// Only registers that HA actually polls periodically are included.
-		// Device info/versions/diagnostics are only read at startup and
-		// handled by forward_unknown_reads.
+		// Configuration and rating values use the slow polling interval.
+		// Omitted startup or diagnostic ranges can be fetched on demand when
+		// forward_unknown_reads is enabled.
 		{Name: "rated_power", Address: 30073, Count: 4, Poll: "slow"},
 		{Name: "optimizer_info", Address: 37200, Count: 2, Poll: "slow"},
 		{Name: "inverter_config", Address: 40122, Count: 10, Poll: "slow"},

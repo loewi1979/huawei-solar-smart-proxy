@@ -1,5 +1,8 @@
 package main
 
+// Standalone YAML is decoded with defaults and validated before use. The
+// resulting Config is shared by the proxy services for the life of a run.
+
 import (
 	"bytes"
 	"fmt"
@@ -11,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Config holds runtime settings for both standalone and HA add-on mode.
 type Config struct {
 	Inverter            InverterConfig  `yaml:"inverter"`
 	Server              ServerConfig    `yaml:"server"`
@@ -26,6 +30,7 @@ type Config struct {
 	MQTT                MQTTConfig      `yaml:"mqtt"`
 }
 
+// InverterConfig defines the upstream TCP endpoint, units and connection timing.
 type InverterConfig struct {
 	WaitAfterConnectMs int    `yaml:"wait_after_connect_ms"`
 	Host               string `yaml:"host"`
@@ -34,16 +39,20 @@ type InverterConfig struct {
 	TimeoutMs          int    `yaml:"timeout_ms"`
 }
 
+// ServerConfig defines where downstream Modbus clients connect.
 type ServerConfig struct {
 	Listen string `yaml:"listen"`
 }
 
+// WebConfig defines the optional status listener and its authentication policy.
 type WebConfig struct {
 	Listen      string `yaml:"listen"`
 	Token       string `yaml:"token"`
 	AuthEnabled bool   `yaml:"auth_enabled"`
 }
 
+// PollingConfig controls request pacing, the wait after a polling attempt and
+// the maximum age at which cached values can be served for each polling tier.
 type PollingConfig struct {
 	FastIntervalS int `yaml:"fast_interval_s"`
 	FastMaxAgeS   int `yaml:"fast_max_age_s"`
@@ -52,6 +61,8 @@ type PollingConfig struct {
 	SlowIntervalS int `yaml:"slow_interval_s"`
 }
 
+// RegisterGroup describes a named, contiguous holding-register range polled for
+// each configured unit. Priority orders due jobs within the same polling tier.
 type RegisterGroup struct {
 	Priority int    `yaml:"priority"`
 	Name     string `yaml:"name"`
@@ -60,26 +71,32 @@ type RegisterGroup struct {
 	Poll     string `yaml:"poll"` // "fast" or "slow"
 }
 
+// ReadPause returns the minimum gap between upstream attempts.
 func (c *Config) ReadPause() time.Duration {
 	return time.Duration(c.Polling.ReadPauseMs) * time.Millisecond
 }
 
+// SlowInterval returns the minimum wait before a slow group is due again.
 func (c *Config) SlowInterval() time.Duration {
 	return time.Duration(c.Polling.SlowIntervalS) * time.Second
 }
 
+// InverterTimeout returns the timeout used by the upstream TCP handler.
 func (c *Config) InverterTimeout() time.Duration {
 	return time.Duration(c.Inverter.TimeoutMs) * time.Millisecond
 }
 
+// CacheTTL returns the retention period for on-disk rows.
 func (c *Config) CacheTTL() time.Duration {
 	return time.Duration(c.CacheTTLH) * time.Hour
 }
 
+// InverterAddr formats the upstream address, including IPv6 host brackets.
 func (c *Config) InverterAddr() string {
 	return net.JoinHostPort(c.Inverter.Host, fmt.Sprint(c.Inverter.Port))
 }
 
+// LoadConfig reads and validates the standalone YAML configuration at path.
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -88,6 +105,9 @@ func LoadConfig(path string) (*Config, error) {
 	return ParseConfig(data)
 }
 
+// ParseConfig applies defaults, strictly decodes one YAML document and
+// normalizes the legacy write option into ReadOnly before validation. Write
+// forwarding requires an explicit opt-in.
 func ParseConfig(data []byte) (*Config, error) {
 
 	cfg := &Config{
@@ -128,8 +148,8 @@ func ParseConfig(data []byte) (*Config, error) {
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return nil, fmt.Errorf("exactly one YAML document required")
 	}
-	// Detect explicit keys, including nulls. Never let two opposite settings
-	// silently override each other during restore or migration.
+	// Inspect explicit policy keys in the YAML tree because decoding onto
+	// defaults can hide a null. The write policy must be a boolean.
 	var document yaml.Node
 	if err := yaml.Unmarshal(data, &document); err != nil {
 		return nil, err
@@ -150,6 +170,8 @@ func ParseConfig(data []byte) (*Config, error) {
 			}
 		}
 	}
+	// Decoding the policy separately also detects both keys when one comes
+	// from a YAML merge. Either spelling can set the write policy on its own.
 	var effectivePolicy struct {
 		ReadOnly    *bool `yaml:"read_only"`
 		AllowWrites *bool `yaml:"allow_writes"`
@@ -169,6 +191,8 @@ func ParseConfig(data []byte) (*Config, error) {
 	return cfg, nil
 }
 
+// Validate checks listener, polling, freshness and register map constraints
+// without opening listeners or contacting the inverter.
 func (cfg *Config) Validate() error {
 	bad := func(s string) error { return fmt.Errorf("invalid configuration: %s", s) }
 	if cfg.Polling.FastIntervalS > 86400 || cfg.Polling.SlowIntervalS > 86400 || cfg.Polling.FastMaxAgeS > 604800 || cfg.Polling.SlowMaxAgeS > 604800 || cfg.CacheTTLH > 8760 {
@@ -215,7 +239,6 @@ func (cfg *Config) Validate() error {
 		return fmt.Errorf("inverter.unit_ids is required (e.g. [1])")
 	}
 
-	// Validate no duplicate unit IDs
 	seen := make(map[byte]bool, len(cfg.Inverter.UnitIDs))
 	for _, uid := range cfg.Inverter.UnitIDs {
 		if uid < 1 || uid > 247 {
@@ -234,6 +257,8 @@ func (cfg *Config) Validate() error {
 		if uint32(g.Address)+uint32(g.Count) > 65536 {
 			return bad("register range overflow")
 		}
+		// Unique names identify cadence windows. Disjoint ranges give each
+		// register one polling tier and corresponding age limit.
 		for _, other := range cfg.RegisterGroups[:i] {
 			if g.Name == other.Name || uint32(g.Address) < uint32(other.Address)+uint32(other.Count) && uint32(other.Address) < uint32(g.Address)+uint32(g.Count) {
 				return bad("duplicate names or overlapping register groups")

@@ -1,5 +1,8 @@
 package main
 
+// The reader schedules background inverter polls and commits complete responses
+// to the cache. Its job timing and measured acquisition cadence feed the status UI.
+
 import (
 	"context"
 	"fmt"
@@ -15,16 +18,17 @@ const (
 	initialScanPasses = 3
 )
 
-// ReaderStats contains runtime statistics from the polling loop.
+// ReaderStats contains runtime counters for attempts in the polling loop.
+// A cycle represents one attempted unit/group poll, including failures.
 type ReaderStats struct {
 	CycleCount    int64
 	LastCycleTime time.Time
 	LastCycleDur  time.Duration
 }
 
-// Reader continuously polls register groups from the inverter
-// and updates the cache. Fast groups are read every cycle, slow
-// groups only when their interval has elapsed.
+// Reader owns the background polling state. Run schedules each unit and
+// register-group pair separately. Status consumers can read counters and
+// cadence snapshots while the poller is active.
 type Reader struct {
 	cfg        *Config
 	client     *InverterClient
@@ -38,6 +42,8 @@ type Reader struct {
 	lastCycleDur  atomic.Int64 // nanoseconds
 }
 
+// NewReader prepares a poller for a fixed configuration and records its fast
+// and slow group lists for status reporting and the optional initial scan.
 func NewReader(cfg *Config, client *InverterClient, cache *RegisterCache) *Reader {
 	r := &Reader{
 		cfg:    cfg,
@@ -57,6 +63,9 @@ func NewReader(cfg *Config, client *InverterClient, cache *RegisterCache) *Reade
 	return r
 }
 
+// readGroup applies the legacy scan's per-group retry policy. Cancellation
+// is checked on entry and during backoff. In-flight requests use the client's
+// network timeout.
 func (r *Reader) readGroup(ctx context.Context, unitID byte, g RegisterGroup) ([]byte, error) {
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -104,13 +113,12 @@ func (r *Reader) readGroup(ctx context.Context, unitID byte, g RegisterGroup) ([
 				continue
 			}
 		} else {
-			// Non-retryable error — return immediately
 			break
 		}
 	}
 
-	// If all retries exhausted on a retryable error, reconnect so the next
-	// read starts with a fresh TCP connection instead of looping on a dead one.
+	// Clear the connection after exhausting attempts on a retryable error.
+	// The next request establishes a fresh upstream session.
 	if IsDeviceBusy(lastErr) || IsTimeout(lastErr) || IsTransactionMismatch(lastErr) || IsConnectionError(lastErr) {
 		slog.Warn("all retries exhausted, reconnecting",
 			"name", g.Name,
@@ -139,9 +147,10 @@ type unitGroup struct {
 	group  RegisterGroup
 }
 
-// InitialScan reads all groups (fast and slow) for all unit IDs to populate
-// the cache before the server starts accepting connections. Groups that fail
-// are retried in additional passes, which handles inverter warm-up after TCP connect.
+// InitialScan is a legacy, best-effort cache warm-up for all units and groups.
+// It batches successful reads per pass and retries failed reads on later passes.
+// Normal startup uses Run directly. The helper returns nil after the passes,
+// even if some groups are still missing.
 func (r *Reader) InitialScan(ctx context.Context) error {
 	allGroups := make([]RegisterGroup, 0, len(r.fastGroups)+len(r.slowGroups))
 	allGroups = append(allGroups, r.fastGroups...)
@@ -193,14 +202,17 @@ func (r *Reader) InitialScan(ctx context.Context) error {
 	return nil
 }
 
-// Run starts the continuous reader loop. It reads fast groups every cycle
-// and slow groups when their interval has elapsed.
+// Run polls one due job at a time until cancellation. Among due jobs, it
+// prefers fast groups, then higher priority, then earlier due times within
+// each tier. Configured intervals are minimum waits after each attempt.
 func (r *Reader) Run(ctx context.Context) {
 	type job struct {
 		group RegisterGroup
 		unit  byte
 		due   time.Time
 	}
+	// A zero due time makes every group eligible on startup. The job list
+	// and its schedule belong to this loop for its entire run.
 	var jobs []job
 	for _, g := range r.cfg.RegisterGroups {
 		for _, u := range r.cfg.Inverter.UnitIDs {
@@ -229,6 +241,7 @@ func (r *Reader) Run(ctx context.Context) {
 			}
 		}
 		if chosen < 0 {
+			// Sleep until the next due job, checking again within a second.
 			if sleepCtx(ctx, time.Until(wake)) != nil {
 				return
 			}
@@ -238,11 +251,15 @@ func (r *Reader) Run(ctx context.Context) {
 		started := time.Now()
 		data, err := r.client.ReadRegisters(j.unit, j.group.Address, j.group.Count)
 		if err == nil && len(data) == int(j.group.Count)*2 {
+			// Preserve the acquisition time and count it toward cadence only
+			// after the entire range has been stored successfully.
 			acquiredAt := time.Now()
 			if r.cache.BatchSet([]PendingWrite{{UnitID: j.unit, Address: j.group.Address, Values: bytesToUint16(data), UpdatedAt: acquiredAt}}) == nil {
 				r.cadence.record(j.unit, j.group.Name, acquiredAt)
 			}
 		} else {
+			// Keep the last successful values and timestamps on a failed or
+			// wrong-length response. The next upstream request opens a new connection.
 			slog.Warn("poll failed", "group", j.group.Name, "unit", j.unit, "error", err)
 			r.client.Reconnect()
 		}
@@ -257,7 +274,8 @@ func (r *Reader) Run(ctx context.Context) {
 	}
 }
 
-// Stats returns current runtime statistics.
+// Stats returns the current counters through separate atomic reads. During
+// a poll, the fields can reflect different attempts.
 func (r *Reader) Stats() ReaderStats {
 	var lastTime time.Time
 	if v := r.lastCycleTime.Load(); v != nil {

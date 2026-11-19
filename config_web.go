@@ -1,3 +1,6 @@
+// The configuration UI validates, backs up, and replaces standalone YAML files.
+// The running process applies saved settings when it restarts.
+
 package main
 
 import (
@@ -10,13 +13,15 @@ import (
 	"sync"
 )
 
+// ConfigStore coordinates access to the configuration file and its single
+// previous version during web requests.
 type ConfigStore struct {
 	Path string
 	mu   sync.Mutex
 }
 
-// Replace uses a same-directory rename; the previous valid file is kept for
-// rollback. Runtime configuration stays immutable until an explicit restart.
+// atomicConfigWrite syncs a private temporary file before renaming it into
+// place. A temporary file beside the target keeps the rename on one filesystem.
 func atomicConfigWrite(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".config-*")
 	if err != nil {
@@ -39,6 +44,9 @@ func atomicConfigWrite(path string, data []byte) error {
 	}
 	return os.Rename(name, path)
 }
+
+// Replace validates the submitted YAML and saves the current valid file as
+// the rollback copy before replacing the configuration.
 func (s *ConfigStore) Replace(data []byte) error {
 	if _, err := ParseConfig(data); err != nil {
 		return err
@@ -57,6 +65,8 @@ func (s *ConfigStore) Replace(data []byte) error {
 	}
 	return atomicConfigWrite(s.Path, data)
 }
+
+// Rollback revalidates and restores the previous file while keeping the backup.
 func (s *ConfigStore) Rollback() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -69,6 +79,9 @@ func (s *ConfigStore) Rollback() error {
 	}
 	return atomicConfigWrite(s.Path, data)
 }
+
+// authorized applies no-store and security headers to all web routes. It
+// checks HTTP Basic credentials when authentication is enabled with a token.
 func (w *WebServer) authorized(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Cache-Control", "no-store")
@@ -85,6 +98,10 @@ func (w *WebServer) authorized(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 	})
 }
+
+// configRoutes registers the YAML editor, download, validate, save, and rollback
+// endpoints. They require a standalone configuration store and a token when
+// web authentication is enabled.
 func (w *WebServer) configRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/config", func(rw http.ResponseWriter, r *http.Request) {
 		if w.store == nil || w.cfg.Web.AuthEnabled && w.cfg.Web.Token == "" {
@@ -100,6 +117,7 @@ func (w *WebServer) configRoutes(mux *http.ServeMux) {
 			return
 		}
 		if r.Method == http.MethodGet {
+			// Download the file on disk, including settings saved for restart.
 			w.store.mu.Lock()
 			data, err := os.ReadFile(w.store.Path)
 			w.store.mu.Unlock()
@@ -131,6 +149,7 @@ func (w *WebServer) configRoutes(mux *http.ServeMux) {
 			http.Error(rw, err.Error(), 400)
 			return
 		}
+		// Validation uses the same parser as startup and leaves the files untouched.
 		if r.URL.Query().Get("validate") == "1" {
 			io.WriteString(rw, "Valid configuration. No changes saved.")
 			return
@@ -158,6 +177,7 @@ func (w *WebServer) configRoutes(mux *http.ServeMux) {
 	})
 }
 
+// configPage uses the same YAML API for editing text and uploading a backup.
 const configPage = `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Huawei Proxy configuration</title>
 <style>body{font:16px system-ui;max-width:1000px;margin:40px auto;padding:20px;background:#101923;color:#eef}textarea{width:100%;height:55vh;background:#182735;color:#eef}button,a,input{margin:12px 12px 12px 0}pre{white-space:pre-wrap}</style>
 <h1>Configuration · Backup & restore</h1><p>Changes activate after a service restart. Keep a backup before changing connection details. Backups contain passwords.</p>

@@ -1,5 +1,8 @@
 package main
 
+// All upstream Modbus traffic shares one TCP connection and request pacing.
+// The connection generation tracks the lifetime of Huawei login sessions.
+
 import (
 	"errors"
 	"fmt"
@@ -14,8 +17,9 @@ import (
 	"github.com/goburrow/modbus"
 )
 
-// InverterClient wraps a Modbus TCP client with mutex-based serialization
-// and enforced inter-read pause to avoid overwhelming the inverter.
+// InverterClient serializes access to the TCP handler, selected unit ID,
+// connection state and timing under mu. The generation can be read without
+// taking mu. The pauses and write policy are fixed at construction.
 type InverterClient struct {
 	mu               sync.Mutex
 	client           modbus.Client
@@ -28,12 +32,13 @@ type InverterClient struct {
 	readOnly         bool
 }
 
+// NewInverterClient configures the shared handler. The first operation opens
+// the connection, so startup does not depend on inverter availability.
 func NewInverterClient(cfg *Config) (*InverterClient, error) {
 	handler := modbus.NewTCPClientHandler(cfg.InverterAddr())
 	handler.Timeout = cfg.InverterTimeout()
 	handler.IdleTimeout = 0 // keep connection alive
 
-	// Connect lazily: an unavailable inverter must not stop diagnostics or recovery.
 	client := modbus.NewClient(handler)
 
 	return &InverterClient{
@@ -45,6 +50,7 @@ func NewInverterClient(cfg *Config) (*InverterClient, error) {
 	}, nil
 }
 
+// Close closes the current connection and invalidates its generation.
 func (ic *InverterClient) Close() {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
@@ -55,8 +61,8 @@ func (ic *InverterClient) Close() {
 	ic.connected = false
 }
 
-// The SDongle needs a quiet period after EACH new TCP connection, not only
-// between requests. Otherwise the first request can be lost on every reconnect.
+// connectLocked requires mu. The SDongle needs a quiet period after each
+// successful TCP connect to receive the first request reliably.
 func (ic *InverterClient) connectLocked() error {
 	if ic.connected {
 		return nil
@@ -70,6 +76,9 @@ func (ic *InverterClient) connectLocked() error {
 	return nil
 }
 
+// finishLocked requires mu and records when an attempt ends. A Modbus
+// exception is a valid response, so the session stays open. Other errors
+// clear the connection and invalidate its generation.
 func (ic *InverterClient) finishLocked(err error) {
 	ic.lastRead = time.Now()
 	var responseError *modbus.ModbusError
@@ -82,7 +91,8 @@ func (ic *InverterClient) finishLocked(err error) {
 	}
 }
 
-// enforcePause sleeps if needed to maintain the minimum gap between reads.
+// enforcePause requires mu. It waits out the request gap from the end of
+// the previous attempt, including failed attempts.
 func (ic *InverterClient) enforcePause() {
 	if ic.lastRead.IsZero() {
 		return
@@ -94,8 +104,8 @@ func (ic *InverterClient) enforcePause() {
 	}
 }
 
-// ReadRegisters reads holding registers from the inverter.
-// Thread-safe; enforces the configured inter-read pause.
+// ReadRegisters reads holding registers for one unit through the shared,
+// paced upstream connection.
 func (ic *InverterClient) ReadRegisters(unitID byte, address, count uint16) ([]byte, error) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
@@ -114,7 +124,8 @@ func (ic *InverterClient) ReadRegisters(unitID byte, address, count uint16) ([]b
 	return result, err
 }
 
-// WriteSingleRegister writes a single holding register on the inverter.
+// WriteSingleRegister writes one holding register when write mode is enabled.
+// It returns upstream Modbus exceptions for the server to relay.
 func (ic *InverterClient) WriteSingleRegister(unitID byte, address, value uint16) ([]byte, error) {
 	if ic.readOnly {
 		return nil, fmt.Errorf("inverter writes disabled by read_only")
@@ -133,7 +144,8 @@ func (ic *InverterClient) WriteSingleRegister(unitID byte, address, value uint16
 	return result, err
 }
 
-// WriteMultipleRegisters writes multiple holding registers on the inverter.
+// WriteMultipleRegisters writes a contiguous range of holding registers when
+// write mode is enabled. The payload is in Modbus byte order.
 func (ic *InverterClient) WriteMultipleRegisters(unitID byte, address, count uint16, data []byte) ([]byte, error) {
 	if ic.readOnly {
 		return nil, fmt.Errorf("inverter writes disabled by read_only")
@@ -152,8 +164,8 @@ func (ic *InverterClient) WriteMultipleRegisters(unitID byte, address, count uin
 	return result, err
 }
 
-// Reconnect closes the TCP connection so the next
-// operation triggers an automatic reconnect by the modbus library.
+// Reconnect clears the current upstream session. The next operation opens
+// a connection and observes the request gap and connect quiet period.
 func (ic *InverterClient) Reconnect() {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
@@ -163,17 +175,17 @@ func (ic *InverterClient) Reconnect() {
 		ic.generation.Add(1)
 	}
 	ic.connected = false
-	// Preserve the last attempt time: failures/reconnects must not bypass the
-	// dongle's minimum request gap and create a burst of failing requests.
 }
 
-// ConnectionGeneration lets an authenticated downstream client detect that
-// its Huawei session was lost even when its own TCP connection is still open.
+// ConnectionGeneration identifies the current upstream connection lifetime.
+// Changes on connection open or invalidation let the server expire downstream
+// Huawei login state when the upstream connection changes.
 func (ic *InverterClient) ConnectionGeneration() uint64 { return ic.generation.Load() }
 
-// ForwardPDU preserves HA's end-to-end Huawei challenge/response exchange.
-// It uses the SAME serialized upstream connection, gap and connect quiet period.
-// Callers must enforce the function allowlist and read-only policy first.
+// ForwardPDU relays a raw device-identification or Huawei login exchange and
+// returns the generation that carried it, captured under mu. The server must
+// validate the function, subfunction and read-only policy before calling.
+// The client also enforces the read-only restriction on private functions.
 func (ic *InverterClient) ForwardPDU(unit byte, pdu []byte) (response []byte, generation uint64, err error) {
 	ic.mu.Lock()
 	defer ic.mu.Unlock()
@@ -207,6 +219,8 @@ func (ic *InverterClient) ForwardPDU(unit byte, pdu []byte) (response []byte, ge
 	if err != nil {
 		return nil, 0, err
 	}
+	// Relay a well-formed exception unchanged so HA can handle the inverter's
+	// response. A successful response must match the requested operation.
 	response = append([]byte{decoded.FunctionCode}, decoded.Data...)
 	if response[0] == pdu[0]|0x80 {
 		if len(response) != 2 {

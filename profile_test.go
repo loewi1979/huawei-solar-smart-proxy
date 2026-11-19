@@ -1,3 +1,6 @@
+// These tests exercise the meter profile's register coverage and how the
+// Modbus server and dashboard use that coverage.
+
 package main
 
 import (
@@ -11,6 +14,8 @@ import (
 	"time"
 )
 
+// TestCombinedFastSlowModbusRead sends one request across both polling tiers
+// and expires each part of the range in turn.
 func TestCombinedFastSlowModbusRead(t *testing.T) {
 	cfg, err := LoadConfig("config.sun2000-m1.meter.example.yaml")
 	if err != nil {
@@ -58,6 +63,8 @@ func TestCombinedFastSlowModbusRead(t *testing.T) {
 	}
 }
 
+// TestMeterProfileCoverageAndDashboard checks the ranges Home Assistant needs
+// and verifies that unconfigured battery fields stay out of the dashboard.
 func TestMeterProfileCoverageAndDashboard(t *testing.T) {
 	cfg, err := LoadConfig("config.sun2000-m1.meter.example.yaml")
 	if err != nil {

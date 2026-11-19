@@ -1,7 +1,11 @@
+// These tests cover subscription and delivery permissions on the embedded broker.
+
 package main
 
 import "testing"
 
+// TestExplorerSubscriptionFilters checks MQTT Explorer's broad subscriptions,
+// the permitted delivery topics, and the denial of remote writes.
 func TestExplorerSubscriptionFilters(t *testing.T) {
 	h := subscriberAuth{cfg: MQTTConfig{Topic: "huawei_wechselrichter"}}
 	for _, topic := range []string{"#", "$SYS/#", "huawei_wechselrichter/#", "huawei_wechselrichter", "huawei_wechselrichter/status"} {

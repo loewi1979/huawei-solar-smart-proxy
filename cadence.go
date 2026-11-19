@@ -1,5 +1,8 @@
 package main
 
+// Polling cadence measures how often the poller acquires and persists fresh
+// data for each unit and group. The dashboard uses it to suggest HA intervals.
+
 import (
 	"sort"
 	"sync"
@@ -14,9 +17,10 @@ type cadenceKey struct {
 	group string
 }
 
-// One interval ends only after a successful acquisition and cache commit.
-// Unchanged values count; failed polls and downstream reads do not. The next
-// successful interval includes any intervening failure/reconnect delay.
+// cadenceWindow retains the latest intervals in a fixed-size ring. Intervals
+// measure the gap between acquisition timestamps after successful commits.
+// Only background polls contribute. Unchanged values count, and the next
+// sample includes any time spent on failed polls or reconnecting.
 type cadenceWindow struct {
 	last      time.Time
 	intervals [cadenceWindowSize]time.Duration
@@ -25,11 +29,15 @@ type cadenceWindow struct {
 	lastGap   time.Duration
 }
 
+// pollingCadence holds the reader's in-memory history. Its mutex guards the
+// map and each window so recording and dashboard snapshots can run concurrently.
 type pollingCadence struct {
 	mu      sync.Mutex
 	windows map[cadenceKey]*cadenceWindow
 }
 
+// record observes a committed poll. The first successful acquisition sets the
+// baseline, and later acquisitions contribute only positive intervals.
 func (p *pollingCadence) record(unit byte, group string, acquired time.Time) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -57,6 +65,9 @@ func (p *pollingCadence) record(unit byte, group string, acquired time.Time) {
 	w.last, w.lastGap = acquired, gap
 }
 
+// PollingCadenceStat summarizes the rolling window for one unit and group.
+// A recommendation requires a fresh fast group with at least five intervals.
+// RecommendedHASecs is zero for all other groups.
 type PollingCadenceStat struct {
 	UnitID            byte
 	Group             string
@@ -70,8 +81,8 @@ type PollingCadenceStat struct {
 	RecommendedHASecs int
 }
 
-// Snapshot in configuration order, never combining different units or groups.
-// The small, bounded windows are in memory and intentionally reset on restart.
+// CadenceStats returns one snapshot per unit and group in configuration order.
+// The bounded history starts empty after each restart.
 func (r *Reader) CadenceStats(now time.Time) []PollingCadenceStat {
 	r.cadence.mu.Lock()
 	defer r.cadence.mu.Unlock()
@@ -84,6 +95,7 @@ func (r *Reader) CadenceStats(now time.Time) []PollingCadenceStat {
 				age := now.Sub(w.last)
 				stat.Stale = age < 0 || age > r.cfg.MaxAge(group.Address, group.Count)
 				if w.count > 0 {
+					// Sort a copy to preserve the ring's overwrite order.
 					intervals := append([]time.Duration(nil), w.intervals[:w.count]...)
 					sort.Slice(intervals, func(i, j int) bool { return intervals[i] < intervals[j] })
 					middle := len(intervals) / 2
@@ -93,6 +105,8 @@ func (r *Reader) CadenceStats(now time.Time) []PollingCadenceStat {
 						stat.Median = lower + (intervals[middle]-lower)/2
 					}
 					stat.Maximum = intervals[len(intervals)-1]
+					// Suggest half the measured median rounded down to whole seconds,
+					// with a minimum of one second.
 					if group.Poll == "fast" && !stat.Stale && w.count >= cadenceRecommendationMinimum {
 						stat.RecommendedHASecs = int(stat.Median / (2 * time.Second))
 						if stat.RecommendedHASecs < 1 {

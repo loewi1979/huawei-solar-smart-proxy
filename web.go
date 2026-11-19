@@ -1,3 +1,6 @@
+// The status UI combines cached register data with the reader's polling and
+// cadence statistics. HTTP requests leave inverter I/O to the other services.
+
 package main
 
 import (
@@ -10,7 +13,7 @@ import (
 	"time"
 )
 
-// WebServer serves a status UI for the proxy.
+// WebServer serves the proxy dashboard, health checks, and standalone YAML UI.
 type WebServer struct {
 	store   *ConfigStore
 	cfg     *Config
@@ -19,6 +22,8 @@ type WebServer struct {
 	startAt time.Time
 }
 
+// NewWebServer records the start time for uptime and supports requests before
+// the reader is attached.
 func NewWebServer(cfg *Config, cache *RegisterCache) *WebServer {
 	return &WebServer{
 		cfg:     cfg,
@@ -38,6 +43,7 @@ func (w *WebServer) ListenAndServe(ctx context.Context) error {
 	mux.HandleFunc("/", w.handleIndex)
 	w.configRoutes(mux)
 	mux.HandleFunc("/healthz", func(rw http.ResponseWriter, r *http.Request) { rw.Write([]byte("ok")) })
+	// Readiness requires every configured unit's fast groups to be fresh.
 	mux.HandleFunc("/readyz", func(rw http.ResponseWriter, r *http.Request) {
 		for _, u := range w.cfg.Inverter.UnitIDs {
 			for _, g := range w.cfg.RegisterGroups {
@@ -85,7 +91,7 @@ type registerGroup struct {
 	Registers []CachedRegister
 }
 
-// unitRegisters groups register groups by unit ID for the web template.
+// unitRegisters holds the raw register sections rendered for one unit.
 type unitRegisters struct {
 	UnitID byte
 	Groups []registerGroup
@@ -103,6 +109,8 @@ type UnitDashboard struct {
 	Items  []DashboardItem
 }
 
+// handleIndex builds the raw register tables, the fresh decoded metrics, and
+// the cadence table for the dashboard template.
 func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	reader := w.reader.Load()
 	var stats ReaderStats
@@ -115,7 +123,7 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	allRegs := w.cache.All()
 	now := time.Now()
 
-	// Build address range lookup
+	// Use half-open ranges with wider endpoints to represent address 65535.
 	type addrRange struct {
 		start, end uint32
 		index      int
@@ -125,11 +133,10 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		ranges[i] = addrRange{start: uint32(g.Address), end: uint32(g.Address) + uint32(g.Count), index: i}
 	}
 
-	// Group registers by unit ID, then by register group
+	// Keep ungrouped entries for on-demand reads outside the configured groups.
 	unitMap := make(map[byte][]registerGroup)
 	unitUngrouped := make(map[byte][]CachedRegister)
 
-	// Initialize groups per unit ID
 	for _, uid := range w.cfg.Inverter.UnitIDs {
 		groups := make([]registerGroup, len(w.cfg.RegisterGroups))
 		for i, g := range w.cfg.RegisterGroups {
@@ -143,11 +150,10 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		unitMap[uid] = groups
 	}
 
-	// Assign registers to groups per unit
 	for _, reg := range allRegs {
 		groups, ok := unitMap[reg.UnitID]
 		if !ok {
-			// Unit ID not in config (e.g. stale cache), create groups on the fly
+			// The persistent cache can still hold rows for units removed from YAML.
 			groups = make([]registerGroup, len(w.cfg.RegisterGroups))
 			for i, g := range w.cfg.RegisterGroups {
 				groups[i] = registerGroup{
@@ -173,7 +179,7 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build ordered list of units
+	// Render configured units in YAML order and omit empty register groups.
 	var units []unitRegisters
 	for _, uid := range w.cfg.Inverter.UnitIDs {
 		groups := unitMap[uid]
@@ -195,7 +201,8 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build dashboard: decode key metrics per unit ID
+	// Render configured metrics only. Raw tables preserve acquisition times
+	// for inspection, while decoded cards mark expired or missing data.
 	var dashboards []UnitDashboard
 	for _, uid := range w.cfg.Inverter.UnitIDs {
 		var items []DashboardItem
@@ -243,6 +250,8 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 		Units:      units,
 	}
 	if reader != nil {
+		// The reader computes the observed intervals and any eligible Home
+		// Assistant suggestion. The template displays the result for each group.
 		data.Cadence = reader.CadenceStats(now)
 	}
 
@@ -280,6 +289,7 @@ func (w *WebServer) handleIndex(rw http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// indexTemplate renders status, measured cadence, decoded metrics, and raw words.
 const indexTemplate = `<!DOCTYPE html>
 <html lang="en">
 <head>
