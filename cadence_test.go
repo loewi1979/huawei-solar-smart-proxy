@@ -8,6 +8,8 @@ import (
 	"time"
 )
 
+// cadenceReader supplies independent units and both polling tiers so the
+// tests can inject timestamps without a running poller.
 func cadenceReader() *Reader {
 	return &Reader{cfg: &Config{
 		Inverter: InverterConfig{UnitIDs: []byte{1, 2}},
@@ -33,9 +35,8 @@ func TestCadenceMedianRecommendationAndIsolation(t *testing.T) {
 			t.Fatal("recommended before five intervals")
 		}
 	}
-	// Six observations delimit five intervals; even sample counts average
-	// the middle pair. A failure contributes no observation, but its delay
-	// remains in the next successful acquisition gap.
+	// A seventh observation gives six intervals, so the median averages the
+	// middle pair. The longer gap represents time between successful polls.
 	stamp = stamp.Add(25 * time.Second)
 	r.cadence.record(1, "inverter", stamp)
 	r.cadence.record(2, "inverter", stamp)
@@ -62,6 +63,7 @@ func TestCadenceRollingWindowAndMinimum(t *testing.T) {
 	r := cadenceReader()
 	stamp := time.Now()
 	r.cadence.record(1, "inverter", stamp)
+	// The first five intervals must disappear when the ring wraps.
 	for i := 0; i < 105; i++ {
 		gap := 500 * time.Millisecond
 		if i < 5 {
@@ -126,6 +128,8 @@ func TestCadenceDashboard(t *testing.T) {
 	}
 }
 
+// TestBatchSetReportsPersistenceFailure uses a closed database to simulate
+// a poll whose values cannot be persisted.
 func TestBatchSetReportsPersistenceFailure(t *testing.T) {
 	c := testCache(t)
 	if err := c.db.Close(); err != nil {

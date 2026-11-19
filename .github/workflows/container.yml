@@ -8,7 +8,7 @@ on:
       version:
         description: "Existing stable release tag to publish"
         required: true
-        default: "v1.0.0"
+        default: "v1.0.1"
 
 permissions:
   contents: read

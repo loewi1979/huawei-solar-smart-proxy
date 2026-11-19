@@ -1,3 +1,6 @@
+// These tests exercise proxy behavior with temporary YAML and SQLite files,
+// in-memory Modbus connections, and local TCP fixtures.
+
 package main
 
 import (
@@ -21,6 +24,7 @@ import (
 	"github.com/mochi-mqtt/server/v2/listeners"
 )
 
+// testYAML supplies two fast groups and one slow group for shared fixtures.
 const testYAML = `inverter:
   host: 127.0.0.1
   port: 15020
@@ -37,6 +41,7 @@ register_groups:
   - {name: info, address: 30000, count: 2, poll: slow}
 `
 
+// testConfig parses a separate configuration so each test can change it safely.
 func testConfig(t *testing.T) *Config {
 	t.Helper()
 	c, err := ParseConfig([]byte(testYAML))
@@ -45,6 +50,8 @@ func testConfig(t *testing.T) *Config {
 	}
 	return c
 }
+
+// testCache opens an isolated SQLite cache and registers its cleanup.
 func testCache(t *testing.T) *RegisterCache {
 	t.Helper()
 	c, err := NewRegisterCache(filepath.Join(t.TempDir(), "cache.db"))
@@ -55,6 +62,7 @@ func testCache(t *testing.T) *RegisterCache {
 	return c
 }
 
+// TestConfigValidation exercises startup parsing and validation of runtime settings.
 func TestConfigValidation(t *testing.T) {
 	for _, path := range []string{"config.example.yaml", "config.sun2000-m1.example.yaml", "config.sun2000-m1.fast.example.yaml"} {
 		if _, err := LoadConfig(path); err != nil {
@@ -107,14 +115,16 @@ func TestEmbeddedMQTTRequiresCredentials(t *testing.T) {
 	}
 }
 
-// This fixture represents an independently managed external broker which
-// authorizes the proxy to publish, rather than the embedded subscriber-only ACL.
+// externalFixtureAuth lets the proxy publish to the two permitted topics when
+// it connects as a network client of the external broker fixture.
 type externalFixtureAuth struct{ subscriberAuth }
 
 func (h *externalFixtureAuth) OnACLCheck(_ *mochi.Client, topic string, _ bool) bool {
 	return topic == h.cfg.Topic || topic == h.cfg.Topic+"/status"
 }
 
+// TestExternalMQTTPublish verifies delivery over TCP and waits past the
+// freshness limit to check that the publisher becomes silent on the data topic.
 func TestExternalMQTTPublish(t *testing.T) {
 	m := defaultMQTTConfig()
 	m.Username = "fixture"
@@ -172,6 +182,8 @@ func TestExternalMQTTPublish(t *testing.T) {
 	}
 }
 
+// TestFreshnessAndPersistence reopens the cache to verify it preserves the
+// original acquisition time and applies freshness checks after restart.
 func TestFreshnessAndPersistence(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cache.db")
 	c, err := NewRegisterCache(path)
@@ -206,6 +218,8 @@ func TestFreshnessAndPersistence(t *testing.T) {
 	}
 }
 
+// TestModbusStaleAndWriteProtection compares wire responses for expired and
+// fresh cache entries, a forbidden write, and an overflowing address range.
 func TestModbusStaleAndWriteProtection(t *testing.T) {
 	c := testCache(t)
 	cfg := testConfig(t)
@@ -248,6 +262,8 @@ func TestModbusStaleAndWriteProtection(t *testing.T) {
 	}
 }
 
+// TestVictronPayload checks the minimum telemetry fields and rejects expired
+// aggregates and Huawei's invalid active-power marker.
 func TestVictronPayload(t *testing.T) {
 	c := testCache(t)
 	m := defaultMQTTConfig()
@@ -277,6 +293,8 @@ func TestVictronPayload(t *testing.T) {
 	}
 }
 
+// TestConfigBackupRestoreRollback exercises validated replacement and rollback
+// on disk, plus the download authentication and save request header.
 func TestConfigBackupRestoreRollback(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	original := []byte(testYAML)
@@ -329,6 +347,8 @@ func TestConfigBackupRestoreRollback(t *testing.T) {
 	}
 }
 
+// TestWebAuthenticationOptOut checks that the opt-out allows requests with or
+// without a configured token and that save still requires the custom header.
 func TestWebAuthenticationOptOut(t *testing.T) {
 	if !testConfig(t).Web.AuthEnabled {
 		t.Fatal("authentication must default to enabled")
@@ -383,8 +403,8 @@ func TestWebAuthenticationOptOut(t *testing.T) {
 	}
 }
 
-// A real TCP fixture exercises goburrow framing, reconnect after connection
-// loss, polling, SQLite timestamps and the no-upstream-access-on-cache-hit path.
+// TestSimulatorFailureRecovery forces a reconnect while polling a local
+// Modbus TCP fixture and checks that fresh cache data and cadence stats return.
 func TestSimulatorFailureRecovery(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -458,6 +478,8 @@ func TestSimulatorFailureRecovery(t *testing.T) {
 	peers.Wait()
 }
 
+// TestEmbeddedBrokerAuthAndStaleSilence uses a real wildcard subscriber to
+// check topic filtering, credential validation, and silence after expiry.
 func TestEmbeddedBrokerAuthAndStaleSilence(t *testing.T) {
 	m := defaultMQTTConfig()
 	m.Enabled = true
@@ -534,6 +556,8 @@ func TestEmbeddedBrokerAuthAndStaleSilence(t *testing.T) {
 	}
 }
 
+// TestFastPollingPreemptsSlowBacklog checks that a newly due fast group runs
+// before the remaining slow groups, using the fixture's observed read order.
 func TestFastPollingPreemptsSlowBacklog(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -597,6 +621,8 @@ func TestFastPollingPreemptsSlowBacklog(t *testing.T) {
 	}
 }
 
+// TestReconnectPreservesRequestGap times a second read against an unavailable
+// inverter to verify that failures and reconnect preserve the request gap.
 func TestReconnectPreservesRequestGap(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

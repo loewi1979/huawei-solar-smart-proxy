@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+// TestReadOnlyConfiguration covers the default policy, both spellings and
+// ambiguous declarations, including one introduced by a YAML merge.
 func TestReadOnlyConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name, yaml string
@@ -42,8 +44,8 @@ func TestReadOnlyConfiguration(t *testing.T) {
 	}
 }
 
-// Actual TCP Modbus write roundtrip to an isolated emulator. This test never
-// contacts hardware or changes an inverter register.
+// TestModbusWriteForwardingPolicy checks what reaches the loopback emulator,
+// what response the downstream client sees and when the cache is updated.
 func TestModbusWriteForwardingPolicy(t *testing.T) {
 	for _, readOnly := range []bool{true, false} {
 		t.Run(map[bool]string{true: "blocked", false: "enabled"}[readOnly], func(t *testing.T) {
@@ -82,6 +84,7 @@ func TestModbusWriteForwardingPolicy(t *testing.T) {
 					}
 					writes <- append([]byte(nil), pdu...)
 					response := pdu
+					// A multiple-write acknowledgement echoes the address and count.
 					if pdu[0] == 0x10 {
 						response = pdu[:5]
 					}
@@ -165,6 +168,8 @@ func encodeRegisters(values []uint16) []byte {
 	return data
 }
 
+// TestReadOnlyClientDefense exercises read-only enforcement on direct calls
+// to the upstream client.
 func TestReadOnlyClientDefense(t *testing.T) {
 	cfg := testConfig(t)
 	client, err := NewInverterClient(cfg)
@@ -185,6 +190,8 @@ func TestReadOnlyClientDefense(t *testing.T) {
 	}
 }
 
+// TestInverterWriteExceptionsPreserved verifies that both write functions
+// relay upstream exception codes and leave the cache untouched on denial.
 func TestInverterWriteExceptionsPreserved(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

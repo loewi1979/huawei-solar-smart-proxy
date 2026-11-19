@@ -1,3 +1,6 @@
+// The register catalog supplies names for raw cache rows and decoding metadata
+// for the dashboard. YAML register groups determine which ranges are polled.
+
 package main
 
 import (
@@ -5,7 +8,7 @@ import (
 	"strings"
 )
 
-// RegisterDef describes a single Modbus register entry.
+// RegisterDef describes a named Huawei value and its length in 16-bit words.
 type RegisterDef struct {
 	Name   string
 	Length uint16
@@ -309,6 +312,7 @@ var registerDefs = map[uint16]RegisterDef{
 	48020: {"emma", 1},
 }
 
+// init adds repeating register layouts using their documented address strides.
 func init() {
 	// PV String Data (32016–32063): 24 strings × 2 registers (voltage + current)
 	for i := 0; i < 24; i++ {
@@ -369,9 +373,11 @@ type DashboardField struct {
 	Length  uint16  // number of registers to read
 	Gain    float64 // divisor (e.g. 1000 means divide raw value by 1000)
 	Unit    string  // display unit suffix (e.g. "kW", "°C")
-	Unit1   bool    // if true, only show for unit ID 1
+	Unit1   bool    // show only for the first configured unit
 }
 
+// dashboardFields selects the measurements and device information for the
+// decoded cards. The web handler filters these fields by configured coverage.
 var dashboardFields = []DashboardField{
 	{"Model", 30000, RegSTR, 15, 0, "", false},
 	{"Serial", 30015, RegSTR, 10, 0, "", false},
@@ -387,6 +393,7 @@ var dashboardFields = []DashboardField{
 	{"Battery Discharge Today", 37786, RegU32, 2, 100, "kWh", true},
 }
 
+// deviceStatusNames expands known inverter state codes for display.
 var deviceStatusNames = map[uint16]string{
 	0x0000: "Standby: initializing",
 	0x0001: "Standby: detecting insulation resistance",
@@ -422,8 +429,8 @@ var deviceStatusNames = map[uint16]string{
 	0xA000: "Standby: no irradiation",
 }
 
-// DecodeDashboardField reads registers from the cache and returns a
-// human-readable string. Returns "" if registers are not cached.
+// DecodeDashboardField formats cached Huawei words for the dashboard. The
+// caller checks freshness. Missing or unrenderable values return an empty string.
 func DecodeDashboardField(f DashboardField, cache *RegisterCache, unitID byte) string {
 	regs := cache.Get(unitID, f.Address, f.Length)
 	if regs == nil {
@@ -436,7 +443,7 @@ func DecodeDashboardField(f DashboardField, cache *RegisterCache, unitID byte) s
 		for _, r := range regs {
 			buf = append(buf, byte(r>>8), byte(r))
 		}
-		// Truncate at first null byte — remaining bytes may contain garbage
+		// Huawei strings can contain padding after the first NUL terminator.
 		if i := strings.IndexByte(string(buf), 0); i >= 0 {
 			buf = buf[:i]
 		}
@@ -470,8 +477,9 @@ func DecodeDashboardField(f DashboardField, cache *RegisterCache, unitID byte) s
 	return ""
 }
 
+// formatValue shows integer values without decimals and other values to two
+// decimal places, followed by the display unit when present.
 func formatValue(val float64, unit string) string {
-	// Use appropriate precision: show decimals only when meaningful
 	var s string
 	if val == float64(int64(val)) {
 		s = fmt.Sprintf("%.0f", val)

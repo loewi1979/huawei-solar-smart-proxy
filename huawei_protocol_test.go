@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+// TestHuaweiIdentificationAndLoginPolicy records which requests reach the
+// loopback fixture and checks how the server handles its login responses.
 func TestHuaweiIdentificationAndLoginPolicy(t *testing.T) {
 	for _, readOnly := range []bool{true, false} {
 		t.Run(map[bool]string{true: "read-only", false: "write-enabled"}[readOnly], func(t *testing.T) {
@@ -133,6 +135,8 @@ func TestHuaweiIdentificationAndLoginPolicy(t *testing.T) {
 			default:
 			}
 			if !readOnly {
+				// Losing the upstream session forces the authenticated downstream
+				// connection to close on its next request.
 				client.Reconnect()
 				if _, err = request([]byte{3, 0x7d, 0x50, 0, 2}); err == nil {
 					t.Fatal("authenticated client survived upstream session loss")
@@ -142,6 +146,8 @@ func TestHuaweiIdentificationAndLoginPolicy(t *testing.T) {
 	}
 }
 
+// TestConnectQuietPeriod measures the delay from accept to the first request
+// on the initial connection and again after an explicit reconnect.
 func TestConnectQuietPeriod(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

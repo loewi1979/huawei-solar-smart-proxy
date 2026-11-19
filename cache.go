@@ -1,5 +1,8 @@
 package main
 
+// The SQLite cache persists register values and timestamps across restarts.
+// Freshness checks apply at read time, independently of disk retention.
+
 import (
 	"database/sql"
 	"fmt"
@@ -10,7 +13,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/embed"
 )
 
-// CachedRegister represents a single register value with its update timestamp.
+// CachedRegister holds a raw register value and the timestamp stored with it.
 type CachedRegister struct {
 	UnitID    byte
 	Address   uint16
@@ -18,7 +21,8 @@ type CachedRegister struct {
 	UpdatedAt time.Time
 }
 
-// PendingWrite holds a group of register values to be written in a batch.
+// PendingWrite describes a contiguous range for one unit. UpdatedAt is the
+// acquisition time. A zero value lets BatchSet timestamp the range.
 type PendingWrite struct {
 	UpdatedAt time.Time
 	UnitID    byte
@@ -27,7 +31,7 @@ type PendingWrite struct {
 }
 
 // RegisterCache is a SQLite-backed cache of Modbus register values.
-// Keys are register addresses, values are raw uint16 register values.
+// Each raw uint16 value is keyed by both Modbus unit ID and register address.
 type RegisterCache struct {
 	db              *sql.DB
 	stmtUpsert      *sql.Stmt
@@ -37,17 +41,20 @@ type RegisterCache struct {
 	stmtDeleteStale *sql.Stmt
 }
 
+// NewRegisterCache opens the cache and prepares its schema. The returned
+// cache owns the database handle until Close and uses one SQLite connection.
 func NewRegisterCache(dbPath string) (*RegisterCache, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite db: %w", err)
 	}
 
-	// Single connection — SQLite doesn't benefit from a pool and this
-	// avoids "database is locked" under concurrent access.
+	// Limit this process to one SQLite connection to avoid lock contention
+	// between its cache readers and writers.
 	db.SetMaxOpenConns(1)
 
-	// Performance pragmas — this is a cache, so durability is not critical.
+	// WAL with NORMAL synchronization trades some crash durability for
+	// write throughput. Polling can repopulate the cache.
 	for _, pragma := range []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
@@ -59,8 +66,8 @@ func NewRegisterCache(dbPath string) (*RegisterCache, error) {
 		}
 	}
 
-	// Migrate from old schema (no unit_id column) by dropping and recreating.
-	// This is safe — it's a cache, InitialScan will repopulate.
+	// Legacy rows lack a unit ID, so they cannot be assigned to a unit
+	// reliably. Rebuild the table and let the background poller fill it.
 	var hasUnitID bool
 	rows, err := db.Query(`PRAGMA table_info(registers)`)
 	if err == nil {
@@ -81,7 +88,6 @@ func NewRegisterCache(dbPath string) (*RegisterCache, error) {
 	}
 
 	if !hasUnitID {
-		// Drop old table if it exists (no unit_id column)
 		db.Exec(`DROP TABLE IF EXISTS registers`)
 		slog.Info("cache: migrated schema (dropped old table without unit_id)")
 	}
@@ -150,7 +156,8 @@ func (c *RegisterCache) Close() error {
 	return c.db.Close()
 }
 
-// All returns all cached registers ordered by unit_id then address.
+// All returns the stored rows ordered by unit ID, then address. It includes
+// expired rows for inspection and uses a zero time for unreadable timestamps.
 func (c *RegisterCache) All() []CachedRegister {
 	rows, err := c.stmtAll.Query()
 	if err != nil {
@@ -178,7 +185,8 @@ func (c *RegisterCache) All() []CachedRegister {
 	return result
 }
 
-// Set stores register values starting at the given address for a unit ID.
+// Set stores a contiguous range for one unit in a transaction, timestamping
+// values as they are written. Cache errors are logged for this best-effort update.
 func (c *RegisterCache) Set(unitID byte, address uint16, values []uint16) {
 	tx, err := c.db.Begin()
 	if err != nil {
@@ -216,7 +224,8 @@ func (c *RegisterCache) SetFromBytes(unitID byte, address uint16, data []byte) {
 }
 
 // BatchSet writes multiple groups of register values in a single SQLite transaction.
-// This ensures that readers see either all-old or all-new data, never a mix.
+// Each range keeps its acquisition time, or uses the batch time when UpdatedAt
+// is zero. For a nonempty batch, a nil error confirms that the transaction committed.
 func (c *RegisterCache) BatchSet(writes []PendingWrite) error {
 	if len(writes) == 0 {
 		return nil
@@ -253,8 +262,8 @@ func (c *RegisterCache) BatchSet(writes []PendingWrite) error {
 	return nil
 }
 
-// Get retrieves register values for the given unit ID and address range.
-// Returns nil if any register in the range is not cached.
+// Get retrieves a complete range for one unit without checking timestamps.
+// It returns nil if any register is missing or the query fails.
 func (c *RegisterCache) Get(unitID byte, address, count uint16) []uint16 {
 	rows, err := c.stmtGet.Query(int(unitID), int(address), int(address)+int(count))
 	if err != nil {
@@ -285,8 +294,8 @@ func (c *RegisterCache) Get(unitID byte, address, count uint16) []uint16 {
 	return result
 }
 
-// GetBytes retrieves register values as raw bytes for a Modbus response.
-// Returns nil if any register in the range is not cached.
+// GetBytes encodes the complete range from Get in Modbus byte order.
+// It returns nil when Get cannot supply the range.
 func (c *RegisterCache) GetBytes(unitID byte, address, count uint16) []byte {
 	values := c.Get(unitID, address, count)
 	if values == nil {
@@ -311,8 +320,8 @@ func (c *RegisterCache) Size() int {
 	return count
 }
 
-// DeleteStale removes registers that haven't been updated within maxAge.
-// Returns the number of deleted registers.
+// DeleteStale evicts rows older than the retention period and returns the
+// number removed. Serving decisions use the freshness checks in freshness.go.
 func (c *RegisterCache) DeleteStale(maxAge time.Duration) int {
 	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
 	result, err := c.stmtDeleteStale.Exec(cutoff)

@@ -1,3 +1,6 @@
+// The Modbus TCP listener serves fresh polled registers from the cache. Optional
+// forwarding and the Huawei login exchange share the serialized inverter client.
+
 package main
 
 import (
@@ -14,14 +17,15 @@ import (
 	"time"
 )
 
-// Server is a Modbus TCP server that serves register values from cache
-// and forwards writes to the inverter.
+// Server handles downstream Modbus requests according to the configured unit,
+// freshness, forwarding, and write policies.
 type Server struct {
 	cfg            *Config
 	cache          *RegisterCache
 	inverterClient atomic.Pointer[InverterClient]
 }
 
+// NewServer constructs a server that can serve the cache during inverter startup.
 func NewServer(cfg *Config, cache *RegisterCache) *Server {
 	return &Server{
 		cfg:   cfg,
@@ -29,13 +33,14 @@ func NewServer(cfg *Config, cache *RegisterCache) *Server {
 	}
 }
 
-// SetInverterClient attaches the inverter client once it's connected.
-// Before this is called, cache misses and writes return a device failure exception.
+// SetInverterClient attaches the shared upstream client after initialization.
+// Requests that need upstream I/O can proceed once the client is attached.
 func (s *Server) SetInverterClient(client *InverterClient) {
 	s.inverterClient.Store(client)
 }
 
-// ListenAndServe starts accepting Modbus TCP connections.
+// ListenAndServe accepts up to 64 concurrent Modbus TCP clients and waits for
+// active handlers to close on cancellation.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	listener, err := net.Listen("tcp", s.cfg.Server.Listen)
 	if err != nil {
@@ -73,6 +78,8 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	}
 }
 
+// handleConnection validates MBAP framing and dispatches requests in order
+// within one downstream connection. Huawei login state is scoped to that socket.
 func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	defer conn.Close()
 	done := make(chan struct{})
@@ -172,6 +179,9 @@ func (s *Server) handleConnection(ctx context.Context, conn net.Conn) {
 	}
 }
 
+// handleHuaweiPDU forwards valid device-identification requests and, with
+// writes enabled, Huawei login requests. The inverter supplies the response
+// PDU and the client supplies its connection generation.
 func (s *Server) handleHuaweiPDU(unit byte, pdu []byte) ([]byte, uint64) {
 	fc := pdu[0]
 	exception := func(code byte) ([]byte, uint64) { return []byte{fc | 0x80, code}, 0 }
@@ -179,8 +189,7 @@ func (s *Server) handleHuaweiPDU(unit byte, pdu []byte) ([]byte, uint64) {
 		return exception(0x01)
 	}
 	if fc == 0x2b {
-		// Read Device Identification (MEI 0x0e) is read-only, not a generic
-		// encapsulated-interface passthrough.
+		// Limit the encapsulated-interface function to Read Device Identification.
 		if len(pdu) != 4 || pdu[1] != 0x0e || pdu[2] < 1 || pdu[2] > 4 {
 			return exception(0x03)
 		}
@@ -190,10 +199,13 @@ func (s *Server) handleHuaweiPDU(unit byte, pdu []byte) ([]byte, uint64) {
 		}
 		switch pdu[1] {
 		case 0x24:
+			// Login challenge request with a one-byte payload.
 			if len(pdu) != 4 || pdu[2] != 1 || pdu[3] != 0 {
 				return exception(0x03)
 			}
 		case 0x25:
+			// Login response with a variable-length username followed by a
+			// length-prefixed 32-byte digest.
 			if len(pdu) < 54 || int(pdu[2]) != len(pdu)-3 {
 				return exception(0x03)
 			}
@@ -218,6 +230,7 @@ func (s *Server) handleHuaweiPDU(unit byte, pdu []byte) ([]byte, uint64) {
 	return response, generation
 }
 
+// sendPDUResponse wraps a PDU with the downstream request's transaction and unit IDs.
 func sendPDUResponse(conn net.Conn, txID uint16, unit byte, pdu []byte) {
 	response := make([]byte, 7+len(pdu))
 	binary.BigEndian.PutUint16(response, txID)
@@ -227,6 +240,8 @@ func sendPDUResponse(conn net.Conn, txID uint16, unit byte, pdu []byte) {
 	conn.Write(response)
 }
 
+// handleReadRegisters treats holding and input register requests as reads of
+// the same Huawei register map. The response preserves the requested function.
 func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc byte, pdu []byte) {
 	if len(pdu) != 5 {
 		sendException(conn, txID, unitID, fc, 0x03)
@@ -241,7 +256,7 @@ func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc
 		return
 	}
 
-	// Try cache first
+	// A request can span polling tiers. Apply the age limit at each address.
 	values, _, freshErr := s.cache.FreshConfigured(unitID, address, count, s.cfg, time.Now())
 	if freshErr == nil {
 		data := make([]byte, len(values)*2)
@@ -253,11 +268,13 @@ func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc
 		return
 	}
 	if s.cfg.KnownRange(address, count) {
+		// The poller owns fully configured ranges. A missing or expired sample
+		// returns gateway target failed so the client can retry later.
 		sendException(conn, txID, unitID, fc, 0x0b)
 		return
 	}
 
-	// Cache miss — forward if enabled and inverter client is available
+	// A range with unconfigured addresses may use a serialized on-demand read.
 	client := s.inverterClient.Load()
 	if s.cfg.ForwardUnknownReads && client != nil {
 		slog.Info("cache miss, forwarding to inverter", "unit_id", unitID, "address", address, "count", count)
@@ -267,7 +284,7 @@ func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc
 			sendException(conn, txID, unitID, fc, upstreamException(err))
 			return
 		}
-		// Cache the forwarded result
+		// Keep the acquisition for later reads under the usual freshness policy.
 		s.cache.SetFromBytes(unitID, address, result)
 		sendReadResponse(conn, txID, unitID, fc, result)
 		return
@@ -277,6 +294,7 @@ func (s *Server) handleReadRegisters(conn net.Conn, txID uint16, unitID byte, fc
 	sendException(conn, txID, unitID, fc, 0x02) // Illegal Data Address
 }
 
+// handleWriteSingleRegister updates the cache after the inverter accepts the write.
 func (s *Server) handleWriteSingleRegister(conn net.Conn, txID uint16, unitID byte, pdu []byte) {
 	if s.cfg.ReadOnly {
 		sendException(conn, txID, unitID, 0x06, 0x01)
@@ -306,13 +324,14 @@ func (s *Server) handleWriteSingleRegister(conn net.Conn, txID uint16, unitID by
 		return
 	}
 
-	// Update cache
 	s.cache.Set(unitID, address, []uint16{value})
 
 	// Response echoes back address + value
 	sendWriteSingleResponse(conn, txID, unitID, address, value)
 }
 
+// handleWriteMultipleRegisters validates the declared range and byte count,
+// then caches the written values once the inverter confirms the operation.
 func (s *Server) handleWriteMultipleRegisters(conn net.Conn, txID uint16, unitID byte, pdu []byte) {
 	if s.cfg.ReadOnly {
 		sendException(conn, txID, unitID, 0x10, 0x01)
@@ -350,7 +369,6 @@ func (s *Server) handleWriteMultipleRegisters(conn net.Conn, txID uint16, unitID
 		return
 	}
 
-	// Update cache
 	s.cache.SetFromBytes(unitID, address, data)
 
 	sendWriteMultipleResponse(conn, txID, unitID, address, count)
@@ -358,8 +376,9 @@ func (s *Server) handleWriteMultipleRegisters(conn net.Conn, txID uint16, unitID
 
 // --- Modbus TCP response helpers ---
 
-// HA uses Huawei 0x80 (permission denied) / 0x02 to decide whether login is
-// needed. Replacing every inverter exception with 0x04 breaks that decision.
+// upstreamException preserves the inverter's Modbus exception code. Home
+// Assistant uses 0x80 (permission denied) and 0x02 when deciding whether to
+// log in. Transport and other unclassified errors map to device failure (0x04).
 func upstreamException(err error) byte {
 	var mb *modbus.ModbusError
 	if errors.As(err, &mb) && mb.ExceptionCode != 0 {

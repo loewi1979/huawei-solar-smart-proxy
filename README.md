@@ -140,11 +140,11 @@ The ready-to-run image is published on
 [GitHub Packages](https://github.com/loewi1979/huawei-solar-smart-proxy/pkgs/container/huawei-solar-smart-proxy):
 
 ```text
-ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.0
+ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.1
 ```
 
 It supports **linux/amd64 and linux/arm64**; Docker selects the matching platform.
-No Go installation, image build or registry login is needed. `1.0.0` pins the
+No Go installation, image build or registry login is needed. `1.0.1` pins the
 application version; `latest` follows the newest stable image published here.
 
 Download the Compose file and configuration example into a new directory:
@@ -152,14 +152,14 @@ Download the Compose file and configuration example into a new directory:
 ```sh
 mkdir -p runtime/config runtime/data
 curl -fL https://raw.githubusercontent.com/loewi1979/huawei-solar-smart-proxy/main/compose.yaml -o compose.yaml
-curl -fL https://raw.githubusercontent.com/loewi1979/huawei-solar-smart-proxy/v1.0.0/config.sun2000-m1.meter.example.yaml -o runtime/config/config.yaml
+curl -fL https://raw.githubusercontent.com/loewi1979/huawei-solar-smart-proxy/v1.0.1/config.sun2000-m1.meter.example.yaml -o runtime/config/config.yaml
 ```
 
 On an existing installation, keep your current YAML instead of downloading
 the example over it. The supplied Compose service uses:
 
 ```yaml
-image: ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.0
+image: ghcr.io/loewi1979/huawei-solar-smart-proxy:1.0.1
 ```
 
 Edit `runtime/config/config.yaml` using the same settings as above. Inside
